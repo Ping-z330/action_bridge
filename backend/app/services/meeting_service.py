@@ -5,8 +5,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.action_item import ActionItem
 from app.models.meeting import Meeting
 from app.models.task import Task
+from app.schemas.action_item import ActionItemUpdate
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
+from app.services.feishu_service import FeishuDeliveryError, send_follow_up_summary, send_meeting_summary
 from app.services.parser_service import parse_transcript
 
 
@@ -93,8 +95,49 @@ def send_meeting_to_feishu(db: Session, meeting_id: int) -> FeishuSendResponse |
     if not meeting:
         return None
 
-    return FeishuSendResponse(
-        meeting_id=meeting.id,
-        status="queued",
-        message=f"Meeting '{meeting.title}' prepared for Feishu delivery.",
-    )
+    try:
+        message = send_meeting_summary(meeting)
+        return FeishuSendResponse(
+            meeting_id=meeting.id,
+            status="sent",
+            message=message,
+        )
+    except FeishuDeliveryError as exc:
+        return FeishuSendResponse(
+            meeting_id=meeting.id,
+            status="failed",
+            message=str(exc),
+        )
+
+
+def send_follow_up_to_feishu(db: Session, meeting_id: int) -> FeishuSendResponse | None:
+    meeting = get_meeting_by_id(db, meeting_id)
+    if not meeting:
+        return None
+
+    try:
+        message = send_follow_up_summary(meeting)
+        return FeishuSendResponse(
+            meeting_id=meeting.id,
+            status="sent",
+            message=message,
+        )
+    except FeishuDeliveryError as exc:
+        return FeishuSendResponse(
+            meeting_id=meeting.id,
+            status="failed",
+            message=str(exc),
+        )
+
+
+def update_action_item(db: Session, action_item_id: int, payload: ActionItemUpdate) -> MeetingResponse | None:
+    action_item = db.query(ActionItem).filter(ActionItem.id == action_item_id).first()
+    if not action_item:
+        return None
+
+    action_item.owner_name = payload.owner_name
+    action_item.deadline = payload.deadline
+    action_item.status = payload.status
+    db.commit()
+
+    return get_meeting_by_id(db, action_item.meeting_id)
