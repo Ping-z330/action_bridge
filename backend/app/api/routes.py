@@ -4,8 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.action_item import ActionItemUpdate
+from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
+from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     create_meeting_with_actions,
     get_meeting_by_id,
@@ -54,6 +56,11 @@ def send_follow_up(meeting_id: int, db: Session = Depends(get_db)) -> FeishuSend
     if not response:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
     return response
+
+
+@router.post("/follow-ups/run", response_model=FollowUpRunResponse)
+def run_follow_ups(db: Session = Depends(get_db)) -> FollowUpRunResponse:
+    return run_follow_up_scan(db)
 
 
 @router.patch("/action-items/{action_item_id}", response_model=MeetingResponse)

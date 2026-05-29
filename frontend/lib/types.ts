@@ -22,3 +22,19 @@ export type MeetingListItem = {
   summary: string;
   created_at: string;
 };
+
+export type FollowUpRunItem = {
+  meeting_id: number;
+  meeting_title: string;
+  reminder_count: number;
+  reminder_types: string[];
+  status: string;
+  message: string;
+};
+
+export type FollowUpRunResponse = {
+  scanned_meetings: number;
+  total_candidates: number;
+  total_sent: number;
+  results: FollowUpRunItem[];
+};

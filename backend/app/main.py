@@ -1,13 +1,27 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.db.base import Base
 from app.db.session import engine
+from app.services.auto_follow_up_scheduler import AutoFollowUpScheduler
 
 Base.metadata.create_all(bind=engine)
+scheduler = AutoFollowUpScheduler()
 
-app = FastAPI(title="ActionBridge API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
+
+
+app = FastAPI(title="ActionBridge API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

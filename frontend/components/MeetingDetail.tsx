@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { ActionItem, Meeting } from "../lib/types";
+import { ActionItem, FollowUpRunResponse, Meeting } from "../lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -57,9 +57,18 @@ function buildEditableState(items: ActionItem[]): EditableActionItems {
   );
 }
 
+function formatBatchFollowUpStatus(result: FollowUpRunResponse) {
+  if (result.total_candidates === 0) {
+    return "本次没有扫描到需要提醒的行动项。";
+  }
+
+  return `已扫描 ${result.scanned_meetings} 个会议，命中 ${result.total_candidates} 条待提醒行动项，成功发送 ${result.total_sent} 条。`;
+}
+
 export function MeetingDetail({ meeting }: { meeting: Meeting }) {
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [followUpStatus, setFollowUpStatus] = useState<string | null>(null);
+  const [batchFollowUpStatus, setBatchFollowUpStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items);
   const [editableItems, setEditableItems] = useState<EditableActionItems>(buildEditableState(meeting.action_items));
@@ -81,7 +90,7 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
   }
 
   async function handleFollowUpSend() {
-    setFollowUpStatus("正在发送跟进提醒...");
+    setFollowUpStatus("正在发送当前会议的跟进提醒...");
 
     const response = await fetch(`${API_BASE}/api/meetings/${meeting.id}/follow-up`, {
       method: "POST",
@@ -95,6 +104,23 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
 
     const result = await response.json();
     setFollowUpStatus(result.message);
+  }
+
+  async function handleBatchFollowUpRun() {
+    setBatchFollowUpStatus("正在运行批量跟进...");
+
+    const response = await fetch(`${API_BASE}/api/follow-ups/run`, {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null);
+      setBatchFollowUpStatus(errorBody?.detail ?? "批量跟进运行失败。");
+      return;
+    }
+
+    const result: FollowUpRunResponse = await response.json();
+    setBatchFollowUpStatus(formatBatchFollowUpStatus(result));
   }
 
   async function handleActionItemSave(actionItemId: number) {
@@ -192,10 +218,17 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
         <span className="pill">同步与通知</span>
         <button onClick={handleFeishuSend}>发送到飞书</button>
         <button className="secondary" onClick={handleFollowUpSend}>
-          发送跟进提醒
+          发送当前会议跟进提醒
         </button>
+        <button className="secondary" onClick={handleBatchFollowUpRun}>
+          运行批量跟进
+        </button>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
+          批量跟进会扫描全部会议中今天到期或已逾期、且尚未完成的行动项，并统一发送提醒。
+        </p>
         {sendStatus ? <p>{sendStatus}</p> : null}
         {followUpStatus ? <p>{followUpStatus}</p> : null}
+        {batchFollowUpStatus ? <p>{batchFollowUpStatus}</p> : null}
       </section>
     </div>
   );
