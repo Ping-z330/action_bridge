@@ -1,0 +1,120 @@
+from datetime import UTC, datetime
+
+import pytest
+
+from app.schemas.meeting import MeetingCreate, MeetingResponse
+from app.services import feishu_event_service
+
+
+@pytest.fixture(autouse=True)
+def clear_feishu_event_dedup_cache() -> None:
+    feishu_event_service._PROCESSED_EVENT_IDS.clear()
+
+
+def _fake_meeting() -> MeetingResponse:
+    return MeetingResponse(
+        id=123,
+        title="每周产品同步会",
+        raw_transcript="讨论官网改版上线风险。",
+        summary="本次会议讨论了官网改版上线风险。",
+        decisions=["官网改版按计划推进。"],
+        created_at=datetime(2026, 5, 30, 8, 0, tzinfo=UTC),
+        action_items=[],
+    )
+
+
+def _meeting_event(message_id: str = "om_test_1") -> dict:
+    return {
+        "header": {"event_id": "event_test_1"},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "message_type": "text",
+                "content": '{"text": "/meeting 每周产品同步会\\n讨论官网改版上线风险。\\nAction: 前端同学修复移动端问题。"}',
+            }
+        },
+    }
+
+
+def test_feishu_events_returns_challenge(client) -> None:
+    response = client.post("/api/feishu/events", json={"challenge": "verify-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"challenge": "verify-token"}
+
+
+def test_feishu_events_ignores_non_meeting_message(client) -> None:
+    response = client.post(
+        "/api/feishu/events",
+        json={
+            "event": {
+                "message": {
+                    "message_type": "text",
+                    "content": '{"text": "普通群聊消息"}',
+                }
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
+def test_feishu_events_creates_meeting_from_command(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    captured_payload: dict[str, MeetingCreate] = {}
+    sent_meetings: list[MeetingResponse] = []
+
+    def fake_create(_db, payload: MeetingCreate) -> MeetingResponse:
+        captured_payload["payload"] = payload
+        return _fake_meeting()
+
+    def fake_send(meeting: MeetingResponse) -> str:
+        sent_meetings.append(meeting)
+        return "sent"
+
+    monkeypatch.setattr(routes, "create_meeting_with_actions", fake_create)
+    monkeypatch.setattr(routes, "send_meeting_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_meeting_event())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert response.json()["meeting_id"] == 123
+    assert captured_payload["payload"].title == "每周产品同步会"
+    assert "讨论官网改版上线风险" in captured_payload["payload"].transcript
+    assert sent_meetings[0].id == 123
+
+
+def test_feishu_events_ignores_duplicate_message_id(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_count = 0
+
+    def fake_create(_db, _payload: MeetingCreate) -> MeetingResponse:
+        nonlocal create_count
+        create_count += 1
+        return _fake_meeting()
+
+    monkeypatch.setattr(routes, "create_meeting_with_actions", fake_create)
+    monkeypatch.setattr(routes, "send_meeting_summary", lambda meeting: "sent")
+
+    first_response = client.post("/api/feishu/events", json=_meeting_event(message_id="om_duplicate"))
+    second_response = client.post("/api/feishu/events", json=_meeting_event(message_id="om_duplicate"))
+
+    assert first_response.status_code == 200
+    assert first_response.json()["status"] == "created"
+    assert second_response.status_code == 200
+    assert second_response.json()["status"] == "duplicated"
+    assert create_count == 1
+
+
+def test_feishu_events_rejects_invalid_meeting_command(client) -> None:
+    response = client.post(
+        "/api/feishu/events",
+        json={"text": "/meeting 只有标题没有正文"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid /meeting command" in response.json()["detail"]

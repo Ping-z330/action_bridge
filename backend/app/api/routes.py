@@ -10,6 +10,8 @@ from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
 from app.schemas.task_result import ActionItemListItem
+from app.services.feishu_event_service import extract_challenge, extract_event_dedup_key, extract_meeting_command, mark_event_processing
+from app.services.feishu_service import FeishuDeliveryError, extract_card_callback_action, send_meeting_summary
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
@@ -21,7 +23,6 @@ from app.services.meeting_service import (
     send_meeting_to_feishu,
     update_action_item,
 )
-from app.services.feishu_service import extract_card_callback_action
 
 router = APIRouter(prefix="/api")
 
@@ -107,3 +108,49 @@ def handle_feishu_card_callback(
         message="行动项已标记为完成。",
         action_item_id=action_item.id,
     )
+
+
+@router.post("/feishu/events")
+def handle_feishu_events(
+    payload: dict[str, Any],
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    challenge = extract_challenge(payload)
+    if challenge:
+        return {"challenge": challenge}
+
+    try:
+        command = extract_meeting_command(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if not command:
+        return {"status": "ignored", "message": "No /meeting command found."}
+
+    dedup_key = extract_event_dedup_key(payload)
+    if not mark_event_processing(dedup_key):
+        return {"status": "duplicated", "message": "Duplicated Feishu event ignored."}
+
+    try:
+        meeting = create_meeting_with_actions(
+            db,
+            MeetingCreate(title=command.title, transcript=command.transcript),
+        )
+    except OperationalError as exc:
+        detail = "Database is temporarily locked. Please retry in a few seconds."
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
+
+    try:
+        send_meeting_summary(meeting)
+    except FeishuDeliveryError as exc:
+        return {
+            "status": "created",
+            "meeting_id": meeting.id,
+            "message": f"Meeting created, but Feishu card delivery failed: {exc}",
+        }
+
+    return {
+        "status": "created",
+        "meeting_id": meeting.id,
+        "message": "Meeting created and Feishu summary card sent.",
+    }

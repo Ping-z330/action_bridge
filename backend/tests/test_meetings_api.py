@@ -80,6 +80,9 @@ def test_send_feishu_returns_failed_when_webhook_missing(client, monkeypatch) ->
     meeting_id = create_response.json()["id"]
 
     monkeypatch.setattr(feishu_service, "FEISHU_WEBHOOK_URL", None)
+    monkeypatch.setattr(feishu_service, "FEISHU_APP_ID", None)
+    monkeypatch.setattr(feishu_service, "FEISHU_APP_SECRET", None)
+    monkeypatch.setattr(feishu_service, "FEISHU_DEFAULT_CHAT_ID", None)
 
     response = client.post(f"/api/meetings/{meeting_id}/send-feishu")
 

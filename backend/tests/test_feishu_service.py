@@ -1,9 +1,11 @@
+import json
 from datetime import UTC, datetime
 
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
 from app.services.feishu_service import (
     _build_follow_up_card_payload,
     _build_meeting_card_payload,
+    _post_app_bot_card,
     extract_card_callback_action,
 )
 
@@ -40,15 +42,15 @@ def test_build_meeting_card_payload_uses_interactive_card() -> None:
 
     assert payload["msg_type"] == "interactive"
     assert payload["card"]["schema"] == "2.0"
-    assert payload["card"]["header"]["title"]["content"] == "📑 会议纪要 | 每周项目同步会"
+    assert payload["card"]["header"]["title"]["content"] == "📌 会议纪要 | 每周项目同步会"
 
     elements = payload["card"]["body"]["elements"]
-    assert elements[0]["content"].startswith("**🧾 会议摘要**")
-    assert elements[2]["content"] == "**📌 行动项**"
+    assert elements[0]["content"].startswith("**📝 会议摘要**")
+    assert elements[2]["content"] == "**📍 行动项**"
     assert elements[3]["content"] == "**前端更新落地页文案**"
     assert elements[4]["content"] == "👤 负责人：前端同学"
     assert elements[5]["content"] == "⏰ **截止日期：周三**"
-    assert elements[6]["content"].startswith("🚦 到期风险：")
+    assert elements[6]["content"].startswith("📊 到期风险：")
     assert elements[7]["content"] == "📌 状态：进行中"
 
 
@@ -71,6 +73,42 @@ def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
     assert payload["msg_type"] == "interactive"
     assert "前端更新落地页文案" in combined
     assert "测试补充回归用例" not in combined
+
+
+def test_post_app_bot_card_sends_interactive_message(monkeypatch) -> None:
+    import app.services.feishu_service as feishu_service
+
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self.payload
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        if "tenant_access_token" in url:
+            return FakeResponse({"code": 0, "tenant_access_token": "tenant-token"})
+        return FakeResponse({"code": 0})
+
+    monkeypatch.setattr(feishu_service, "FEISHU_APP_ID", "cli_test")
+    monkeypatch.setattr(feishu_service, "FEISHU_APP_SECRET", "secret")
+    monkeypatch.setattr(feishu_service, "FEISHU_DEFAULT_CHAT_ID", "oc_test")
+    monkeypatch.setattr(feishu_service.httpx, "post", fake_post)
+
+    _post_app_bot_card({"schema": "2.0", "body": {"elements": []}})
+
+    assert calls[0]["json"] == {"app_id": "cli_test", "app_secret": "secret"}
+    assert calls[1]["params"] == {"receive_id_type": "chat_id"}
+    assert calls[1]["headers"] == {"Authorization": "Bearer tenant-token"}
+    assert calls[1]["json"]["receive_id"] == "oc_test"
+    assert calls[1]["json"]["msg_type"] == "interactive"
+    assert json.loads(calls[1]["json"]["content"])["schema"] == "2.0"
 
 
 def test_extract_card_callback_action_accepts_nested_payload() -> None:

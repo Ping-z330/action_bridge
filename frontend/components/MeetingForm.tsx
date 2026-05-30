@@ -1,18 +1,60 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChangeEvent, FormEvent, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const ACCEPTED_TEXT_TYPES = [".txt", ".md", ".vtt", ".srt"];
+
+function getTitleFromFileName(fileName: string) {
+  return fileName.replace(/\.[^/.]+$/, "").trim();
+}
 
 export function MeetingForm() {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [inputMode, setInputMode] = useState<"text" | "file">("text");
+  const [selectedFileName, setSelectedFileName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setError(null);
+    setInputMode("file");
+
+    const extension = `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`;
+    if (!ACCEPTED_TEXT_TYPES.includes(extension)) {
+      setError("当前版本仅支持 txt、md、vtt、srt 文本文件。");
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      const content = await file.text();
+      const trimmedContent = content.trim();
+
+      if (!trimmedContent) {
+        setError("文件内容为空，请重新选择会议记录文件。");
+        event.target.value = "";
+        return;
+      }
+
+      setTranscript(trimmedContent);
+      setSelectedFileName(file.name);
+
+      if (!title.trim()) {
+        setTitle(getTitleFromFileName(file.name));
+      }
+    } catch {
+      setError("文件读取失败，请确认文件是 UTF-8 文本格式。");
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
@@ -44,14 +86,34 @@ export function MeetingForm() {
       <div className="work-card-header">
         <div>
           <p className="step-title">1. 会议输入</p>
-          <p className="header-note">粘贴会议记录后，AI 会生成结构化纪要并在右侧展示。</p>
+          <p className="header-note">粘贴会议记录或上传文本文件，AI 会生成结构化纪要并在右侧展示。</p>
         </div>
       </div>
 
       <div className="segmented-control" aria-label="输入方式">
-        <button className="active" type="button">粘贴文本</button>
-        <button type="button">上传文件</button>
+        <button
+          className={inputMode === "text" ? "active" : ""}
+          type="button"
+          onClick={() => setInputMode("text")}
+        >
+          粘贴文本
+        </button>
+        <button
+          className={inputMode === "file" ? "active" : ""}
+          type="button"
+          onClick={() => setInputMode("file")}
+        >
+          上传文件
+        </button>
       </div>
+
+      {inputMode === "file" ? (
+        <label className="file-upload-box">
+          <input accept={ACCEPTED_TEXT_TYPES.join(",")} type="file" onChange={handleFileChange} />
+          <strong>{selectedFileName || "选择会议记录文件"}</strong>
+          <span>支持 txt、md、vtt、srt。上传后会自动填入下方会议记录。</span>
+        </label>
+      ) : null}
 
       <label className="field">
         <span>会议标题 *</span>
