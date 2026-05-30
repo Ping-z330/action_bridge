@@ -24,6 +24,31 @@ def send_follow_up_summary(meeting: MeetingResponse) -> str:
     return "跟进提醒卡片已发送到飞书。"
 
 
+def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Parse the action payload sent by Feishu interactive cards.
+
+    The exact nesting can differ between Feishu card versions, so the parser
+    accepts both the official nested shape and the simplified shape used in
+    local tests.
+    """
+    value = (
+        payload.get("action", {}).get("value")
+        or payload.get("event", {}).get("action", {}).get("value")
+        or payload.get("value")
+        or {}
+    )
+
+    action_item_id = value.get("action_item_id") or value.get("id")
+    action = value.get("action") or value.get("type")
+
+    try:
+        parsed_id = int(action_item_id)
+    except (TypeError, ValueError):
+        parsed_id = None
+
+    return parsed_id, action
+
+
 def _ensure_webhook_configured() -> None:
     if not FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL.startswith("replace_with_"):
         raise FeishuDeliveryError("FEISHU_WEBHOOK_URL is not configured")
@@ -44,7 +69,7 @@ def _build_meeting_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
             "schema": "2.0",
             "config": {"update_multi": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"📝 会议纪要 | {meeting.title}"},
+                "title": {"tag": "plain_text", "content": f"📑 会议纪要 | {meeting.title}"},
                 "template": "blue",
             },
             "body": {
@@ -55,6 +80,7 @@ def _build_meeting_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
                     _markdown_block(f"**✅ 会议结论**\n{_format_bullets(meeting.decisions)}"),
                     _markdown_block("**📌 行动项**"),
                     *_build_action_item_elements(meeting.action_items),
+                    _markdown_block("**🖥️ 状态更新**\n请在 ActionBridge 后台任务结果页确认完成状态，机器人会持续跟进未完成任务。"),
                 ],
             },
         },
@@ -68,6 +94,7 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
         body_elements = [
             _markdown_block("**📌 待跟进行动项**\n请优先关注以下尚未完成的任务。"),
             *_build_action_item_elements(unfinished_items),
+            _markdown_block("**🖥️ 状态更新**\n请在 ActionBridge 后台任务结果页更新任务状态。"),
         ]
         template = "orange"
     else:
@@ -104,9 +131,10 @@ def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dic
                 _markdown_block(f"👤 负责人：{item.owner_name}"),
                 _markdown_block(f"⏰ **截止日期：{item.deadline}**"),
                 _markdown_block(f"📌 状态：{_get_status_label(item.status)}"),
-                _divider(),
             ]
         )
+
+        elements.append(_divider())
 
     if elements:
         elements.pop()
@@ -143,7 +171,7 @@ def _get_status_label(status: str) -> str:
         "pending": "待处理",
         "in_progress": "进行中",
         "completed": "已完成",
-        "failed": "失败",
+        "failed": "有风险",
     }.get(status, status)
 
 

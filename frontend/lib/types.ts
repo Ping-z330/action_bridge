@@ -6,6 +6,12 @@ export type ActionItem = {
   status: string;
 };
 
+export type ActionItemListItem = ActionItem & {
+  meeting_id: number;
+  meeting_title: string;
+  created_at: string;
+};
+
 export type Meeting = {
   id: number;
   title: string;
@@ -21,6 +27,10 @@ export type MeetingListItem = {
   title: string;
   summary: string;
   created_at: string;
+  action_count: number;
+  pending_count: number;
+  completed_count: number;
+  closure_status: string;
 };
 
 export type FollowUpRunItem = {

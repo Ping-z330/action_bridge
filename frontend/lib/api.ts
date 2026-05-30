@@ -1,4 +1,4 @@
-import { Meeting, MeetingListItem } from "./types";
+import { ActionItemListItem, Meeting, MeetingListItem } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -24,6 +24,14 @@ export async function fetchMeeting(id: string): Promise<Meeting> {
   }
   if (!response.ok) {
     throw new Error("Failed to fetch meeting");
+  }
+  return response.json();
+}
+
+export async function fetchActionItems(): Promise<ActionItemListItem[]> {
+  const response = await fetch(`${API_BASE}/api/action-items`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Failed to fetch action items");
   }
   return response.json();
 }

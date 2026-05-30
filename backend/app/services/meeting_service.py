@@ -8,6 +8,7 @@ from app.models.task import Task
 from app.schemas.action_item import ActionItemUpdate
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
+from app.schemas.task_result import ActionItemListItem
 from app.services.feishu_service import FeishuDeliveryError, send_follow_up_summary, send_meeting_summary
 from app.services.parser_service import parse_transcript
 
@@ -65,8 +66,52 @@ def create_meeting_with_actions(db: Session, payload: MeetingCreate) -> MeetingR
 
 
 def list_meetings(db: Session) -> list[MeetingListItem]:
-    meetings = db.query(Meeting).order_by(Meeting.created_at.desc()).all()
-    return [MeetingListItem.model_validate(meeting) for meeting in meetings]
+    meetings = db.query(Meeting).options(selectinload(Meeting.action_items)).order_by(Meeting.created_at.desc()).all()
+    results: list[MeetingListItem] = []
+
+    for meeting in meetings:
+        action_count = len(meeting.action_items)
+        completed_count = len([item for item in meeting.action_items if item.status == "completed"])
+        pending_count = action_count - completed_count
+        closure_status = "closed" if action_count > 0 and pending_count == 0 else "open"
+
+        results.append(
+            MeetingListItem(
+                id=meeting.id,
+                title=meeting.title,
+                summary=meeting.summary,
+                created_at=meeting.created_at,
+                action_count=action_count,
+                pending_count=pending_count,
+                completed_count=completed_count,
+                closure_status=closure_status,
+            )
+        )
+
+    return results
+
+
+def list_action_items(db: Session) -> list[ActionItemListItem]:
+    rows = (
+        db.query(ActionItem, Meeting.title.label("meeting_title"))
+        .join(Meeting, ActionItem.meeting_id == Meeting.id)
+        .order_by(ActionItem.created_at.desc())
+        .all()
+    )
+
+    return [
+        ActionItemListItem(
+            id=action_item.id,
+            meeting_id=action_item.meeting_id,
+            meeting_title=meeting_title,
+            title=action_item.title,
+            owner_name=action_item.owner_name,
+            deadline=action_item.deadline,
+            status=action_item.status,
+            created_at=action_item.created_at,
+        )
+        for action_item, meeting_title in rows
+    ]
 
 
 def get_meeting_by_id(db: Session, meeting_id: int) -> MeetingResponse | None:
@@ -141,3 +186,14 @@ def update_action_item(db: Session, action_item_id: int, payload: ActionItemUpda
     db.commit()
 
     return get_meeting_by_id(db, action_item.meeting_id)
+
+
+def complete_action_item(db: Session, action_item_id: int) -> ActionItem | None:
+    action_item = db.query(ActionItem).filter(ActionItem.id == action_item_id).first()
+    if not action_item:
+        return None
+
+    action_item.status = "completed"
+    db.commit()
+    db.refresh(action_item)
+    return action_item

@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
 
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
-from app.services.feishu_service import _build_follow_up_card_payload, _build_meeting_card_payload
+from app.services.feishu_service import (
+    _build_follow_up_card_payload,
+    _build_meeting_card_payload,
+    extract_card_callback_action,
+)
 
 
 def build_meeting() -> MeetingResponse:
@@ -36,7 +40,8 @@ def test_build_meeting_card_payload_uses_interactive_card() -> None:
 
     assert payload["msg_type"] == "interactive"
     assert payload["card"]["schema"] == "2.0"
-    assert payload["card"]["header"]["title"]["content"] == "📝 会议纪要 | 每周项目同步会"
+    assert payload["card"]["header"]["title"]["content"] == "📑 会议纪要 | 每周项目同步会"
+
     elements = payload["card"]["body"]["elements"]
     assert elements[0]["content"].startswith("**🧾 会议摘要**")
     assert elements[2]["content"] == "**📌 行动项**"
@@ -44,6 +49,16 @@ def test_build_meeting_card_payload_uses_interactive_card() -> None:
     assert elements[4]["content"] == "👤 负责人：前端同学"
     assert elements[5]["content"] == "⏰ **截止日期：周三**"
     assert elements[6]["content"] == "📌 状态：进行中"
+
+
+def test_build_meeting_card_payload_keeps_status_updates_in_backend() -> None:
+    payload = _build_meeting_card_payload(build_meeting())
+    elements = payload["card"]["body"]["elements"]
+    buttons = [element for element in elements if element["tag"] == "button"]
+    text_blocks = [element["content"] for element in elements if element["tag"] == "markdown"]
+
+    assert buttons == []
+    assert any("ActionBridge 后台任务结果页" in content for content in text_blocks)
 
 
 def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
@@ -55,3 +70,19 @@ def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
     assert payload["msg_type"] == "interactive"
     assert "前端更新落地页文案" in combined
     assert "测试补充回归用例" not in combined
+
+
+def test_extract_card_callback_action_accepts_nested_payload() -> None:
+    action_item_id, action = extract_card_callback_action(
+        {
+            "action": {
+                "value": {
+                    "action": "complete_action_item",
+                    "action_item_id": 12,
+                }
+            }
+        }
+    )
+
+    assert action_item_id == 12
+    assert action == "complete_action_item"

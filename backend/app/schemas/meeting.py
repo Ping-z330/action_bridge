@@ -35,5 +35,9 @@ class MeetingListItem(BaseModel):
     title: str
     summary: str
     created_at: datetime
+    action_count: int = 0
+    pending_count: int = 0
+    completed_count: int = 0
+    closure_status: str = "pending"
 
     model_config = {"from_attributes": True}

@@ -1,21 +1,27 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.schemas.action_item import ActionItemUpdate
+from app.schemas.action_item import ActionItemUpdate, FeishuCardCallbackResponse
 from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
+from app.schemas.task_result import ActionItemListItem
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
+    complete_action_item,
     create_meeting_with_actions,
     get_meeting_by_id,
+    list_action_items,
     list_meetings,
     send_follow_up_to_feishu,
     send_meeting_to_feishu,
     update_action_item,
 )
+from app.services.feishu_service import extract_card_callback_action
 
 router = APIRouter(prefix="/api")
 
@@ -32,6 +38,11 @@ def create_meeting(payload: MeetingCreate, db: Session = Depends(get_db)) -> Mee
 @router.get("/meetings", response_model=list[MeetingListItem])
 def get_meetings(db: Session = Depends(get_db)) -> list[MeetingListItem]:
     return list_meetings(db)
+
+
+@router.get("/action-items", response_model=list[ActionItemListItem])
+def get_action_items(db: Session = Depends(get_db)) -> list[ActionItemListItem]:
+    return list_action_items(db)
 
 
 @router.get("/meetings/{meeting_id}", response_model=MeetingResponse)
@@ -73,3 +84,26 @@ def patch_action_item(
     if not meeting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
     return meeting
+
+
+@router.post("/feishu/card-callback")
+def handle_feishu_card_callback(
+    payload: dict[str, Any],
+    db: Session = Depends(get_db),
+) -> FeishuCardCallbackResponse | dict[str, str]:
+    if "challenge" in payload:
+        return {"challenge": payload["challenge"]}
+
+    action_item_id, action = extract_card_callback_action(payload)
+    if action_item_id is None or action != "complete_action_item":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported Feishu card action")
+
+    action_item = complete_action_item(db, action_item_id)
+    if not action_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+
+    return FeishuCardCallbackResponse(
+        status="ok",
+        message="行动项已标记为完成。",
+        action_item_id=action_item.id,
+    )

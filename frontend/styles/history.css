@@ -1,0 +1,214 @@
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  padding: 18px;
+}
+
+.panel-header h2 {
+  margin: 6px 0;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.panel-header p {
+  margin-bottom: 0;
+}
+
+.section-label {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.panel-body {
+  padding: 18px;
+}
+
+.meeting-list {
+  display: grid;
+  gap: 12px;
+}
+
+.meeting-row {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px;
+}
+
+.meeting-row:hover {
+  border-color: var(--primary);
+  background: #ffffff;
+}
+
+.meeting-row strong {
+  color: var(--text);
+}
+
+.meeting-row p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.history-page {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.history-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(21, 36, 58, 0.08), rgba(255, 255, 255, 0) 46%),
+    var(--surface);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.history-hero h1 {
+  margin: 6px 0 8px;
+  color: var(--text);
+  font-size: 26px;
+}
+
+.history-hero p {
+  margin-bottom: 0;
+}
+
+.history-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.history-list-card {
+  display: grid;
+  gap: 16px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-toolbar h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.history-toolbar p {
+  margin: 0;
+}
+
+.history-search {
+  max-width: 320px;
+}
+
+.history-record-list {
+  display: grid;
+  gap: 12px;
+}
+
+.history-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 16px;
+}
+
+.history-record-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.history-record-title h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+}
+
+.history-record-main p {
+  margin-bottom: 12px;
+}
+
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-meta span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 4px 9px;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 920px) {
+  .history-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-hero,
+  .history-toolbar,
+  .history-record {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .history-search {
+    max-width: none;
+  }
+
+  .history-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .history-page {
+    padding: 14px;
+  }
+
+  .history-stat-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -156,80 +156,91 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
   }
 
   return (
-    <div className="grid">
-      <section className="panel stack">
-        <span className="pill">会议摘要</span>
-        <h1>{meeting.title}</h1>
-        <p>{meeting.summary}</p>
-      </section>
+    <section className="work-card result-column">
+      <div className="work-card-header">
+        <div>
+          <p className="step-title">AI 整理结果</p>
+          <p className="header-note">{meeting.title}</p>
+        </div>
+        <span className="ok-dot">{actionItems.length} 个行动项</span>
+      </div>
 
-      <section className="panel stack">
-        <span className="pill">会议结论</span>
-        <ul>
-          {meeting.decisions.map((decision) => (
-            <li key={decision}>{decision}</li>
-          ))}
-        </ul>
-      </section>
+      <div className="result-stack">
+        <section className="result-block">
+          <h3>会议摘要</h3>
+          <p>{meeting.summary}</p>
+        </section>
 
-      <section className="panel stack">
-        <span className="pill">行动项</span>
-        {actionItems.map((item) => (
-          <div key={item.id} className="panel stack">
-            <strong>{normalizeActionTitle(item.title, item.owner_name)}</strong>
-            <label className="stack">
-              <span>负责人</span>
-              <input
-                value={editableItems[item.id]?.owner_name ?? item.owner_name}
-                onChange={(event) => updateField(item.id, "owner_name", event.target.value)}
-              />
-            </label>
-            <label className="stack">
-              <span>截止时间</span>
-              <input
-                value={editableItems[item.id]?.deadline ?? item.deadline}
-                onChange={(event) => updateField(item.id, "deadline", event.target.value)}
-              />
-            </label>
-            <label className="stack">
-              <span>状态</span>
-              <select
-                value={editableItems[item.id]?.status ?? item.status}
-                onChange={(event) => updateField(item.id, "status", event.target.value)}
-                style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid var(--border)" }}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p>当前状态：{getStatusLabel(editableItems[item.id]?.status ?? item.status)}</p>
-            <button className="secondary" onClick={() => handleActionItemSave(item.id)}>
-              保存行动项
+        <section className="result-block">
+          <h3>关键决策</h3>
+          <ul className="plain-list">
+            {meeting.decisions.map((decision) => (
+              <li key={decision}>{decision}</li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="result-block">
+          <h3>行动项</h3>
+          <div className="result-stack">
+            {actionItems.map((item, index) => {
+              const currentStatus = editableItems[item.id]?.status ?? item.status;
+
+              return (
+                <div key={item.id} className="action-edit-row">
+                  <div className="action-index">{index + 1}</div>
+                  <div className="action-edit-main">
+                    <p className="action-title">{normalizeActionTitle(item.title, item.owner_name)}</p>
+                    <div className="action-edit-grid">
+                      <input
+                        value={editableItems[item.id]?.owner_name ?? item.owner_name}
+                        onChange={(event) => updateField(item.id, "owner_name", event.target.value)}
+                        aria-label="负责人"
+                      />
+                      <input
+                        value={editableItems[item.id]?.deadline ?? item.deadline}
+                        onChange={(event) => updateField(item.id, "deadline", event.target.value)}
+                        aria-label="截止时间"
+                      />
+                      <select
+                        value={currentStatus}
+                        onChange={(event) => updateField(item.id, "status", event.target.value)}
+                        aria-label="状态"
+                      >
+                        {STATUS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <button className="secondary" onClick={() => handleActionItemSave(item.id)}>
+                    保存
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="result-block">
+          <h3>同步与通知</h3>
+          <div className="action-bar">
+            <button onClick={handleFeishuSend}>发送摘要</button>
+            <button className="secondary" onClick={handleFollowUpSend}>
+              当前会议跟进
+            </button>
+            <button className="secondary" onClick={handleBatchFollowUpRun}>
+              批量跟进
             </button>
           </div>
-        ))}
-        {saveStatus ? <p>{saveStatus}</p> : null}
-      </section>
-
-      <section className="panel stack">
-        <span className="pill">同步与通知</span>
-        <button onClick={handleFeishuSend}>发送到飞书</button>
-        <button className="secondary" onClick={handleFollowUpSend}>
-          发送当前会议跟进提醒
-        </button>
-        <button className="secondary" onClick={handleBatchFollowUpRun}>
-          运行批量跟进
-        </button>
-        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
-          批量跟进会扫描全部会议中今天到期或已逾期、且尚未完成的行动项，并统一发送提醒。
-        </p>
-        {sendStatus ? <p>{sendStatus}</p> : null}
-        {followUpStatus ? <p>{followUpStatus}</p> : null}
-        {batchFollowUpStatus ? <p>{batchFollowUpStatus}</p> : null}
-      </section>
-    </div>
+          {saveStatus ? <p className="status-message">{saveStatus}</p> : null}
+          {sendStatus ? <p className="status-message">{sendStatus}</p> : null}
+          {followUpStatus ? <p className="status-message">{followUpStatus}</p> : null}
+          {batchFollowUpStatus ? <p className="status-message">{batchFollowUpStatus}</p> : null}
+        </section>
+      </div>
+    </section>
   );
 }

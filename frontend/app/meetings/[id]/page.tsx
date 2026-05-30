@@ -9,8 +9,10 @@ export default async function MeetingDetailPage({ params }: { params: { id: stri
     const meeting = await fetchMeeting(params.id);
 
     return (
-      <main className="grid">
-        <Link href="/">返回首页</Link>
+      <main className="detail-page">
+        <Link href="/" className="back-link">
+          返回工作台
+        </Link>
         <MeetingDetail meeting={meeting} />
       </main>
     );
