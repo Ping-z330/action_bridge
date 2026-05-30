@@ -13,6 +13,8 @@ class ActionItemResponse(BaseModel):
     title: str
     owner_name: str
     deadline: str
+    deadline_date: str = ""
+    deadline_time: str = ""
     status: str
 
     model_config = {"from_attributes": True}
@@ -38,6 +40,8 @@ class MeetingListItem(BaseModel):
     action_count: int = 0
     pending_count: int = 0
     completed_count: int = 0
+    due_today_count: int = 0
+    overdue_count: int = 0
     closure_status: str = "pending"
 
     model_config = {"from_attributes": True}

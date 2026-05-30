@@ -5,10 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.db.base import Base
+from app.db.migrations import run_lightweight_migrations
 from app.db.session import engine
 from app.services.auto_follow_up_scheduler import AutoFollowUpScheduler
 
 Base.metadata.create_all(bind=engine)
+run_lightweight_migrations()
 scheduler = AutoFollowUpScheduler()
 
 

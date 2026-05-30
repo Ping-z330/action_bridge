@@ -10,12 +10,8 @@ const STATUS_OPTIONS = [
   { value: "pending", label: "待处理" },
   { value: "in_progress", label: "进行中" },
   { value: "completed", label: "已完成" },
-  { value: "failed", label: "失败" },
+  { value: "failed", label: "有风险" },
 ];
-
-function getStatusLabel(status: string) {
-  return STATUS_OPTIONS.find((option) => option.value === status)?.label ?? status;
-}
 
 function normalizeActionTitle(title: string, ownerName: string) {
   let normalized = title.trim();
@@ -40,9 +36,13 @@ type EditableActionItems = Record<
   {
     owner_name: string;
     deadline: string;
+    deadline_date: string;
+    deadline_time: string;
     status: string;
   }
 >;
+
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 function buildEditableState(items: ActionItem[]): EditableActionItems {
   return Object.fromEntries(
@@ -51,6 +51,8 @@ function buildEditableState(items: ActionItem[]): EditableActionItems {
       {
         owner_name: item.owner_name,
         deadline: item.deadline,
+        deadline_date: item.deadline_date,
+        deadline_time: item.deadline_time,
         status: item.status,
       },
     ])
@@ -65,11 +67,19 @@ function formatBatchFollowUpStatus(result: FollowUpRunResponse) {
   return `已扫描 ${result.scanned_meetings} 个会议，命中 ${result.total_candidates} 条待提醒行动项，成功发送 ${result.total_sent} 条。`;
 }
 
+function getSaveButtonText(state: SaveState) {
+  if (state === "saving") return "保存中...";
+  if (state === "saved") return "已保存";
+  if (state === "error") return "重试";
+  return "保存";
+}
+
 export function MeetingDetail({ meeting }: { meeting: Meeting }) {
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [followUpStatus, setFollowUpStatus] = useState<string | null>(null);
   const [batchFollowUpStatus, setBatchFollowUpStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [saveStates, setSaveStates] = useState<Record<number, SaveState>>({});
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items);
   const [editableItems, setEditableItems] = useState<EditableActionItems>(buildEditableState(meeting.action_items));
 
@@ -125,7 +135,8 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
 
   async function handleActionItemSave(actionItemId: number) {
     const payload = editableItems[actionItemId];
-    setSaveStatus("正在保存行动项...");
+    setSaveStatus(null);
+    setSaveStates((current) => ({ ...current, [actionItemId]: "saving" }));
 
     const response = await fetch(`${API_BASE}/api/action-items/${actionItemId}`, {
       method: "PATCH",
@@ -136,6 +147,7 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
     if (!response.ok) {
       const errorBody = await response.json().catch(() => null);
       setSaveStatus(errorBody?.detail ?? "行动项保存失败。");
+      setSaveStates((current) => ({ ...current, [actionItemId]: "error" }));
       return;
     }
 
@@ -143,9 +155,19 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
     setActionItems(updatedMeeting.action_items);
     setEditableItems(buildEditableState(updatedMeeting.action_items));
     setSaveStatus("行动项已更新。");
+    setSaveStates((current) => ({ ...current, [actionItemId]: "saved" }));
+
+    window.setTimeout(() => {
+      setSaveStates((current) => ({ ...current, [actionItemId]: "idle" }));
+    }, 1400);
   }
 
-  function updateField(actionItemId: number, field: "owner_name" | "deadline" | "status", value: string) {
+  function updateField(
+    actionItemId: number,
+    field: "owner_name" | "deadline" | "deadline_date" | "deadline_time" | "status",
+    value: string
+  ) {
+    setSaveStates((current) => ({ ...current, [actionItemId]: "idle" }));
     setEditableItems((current) => ({
       ...current,
       [actionItemId]: {
@@ -185,38 +207,60 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
           <div className="result-stack">
             {actionItems.map((item, index) => {
               const currentStatus = editableItems[item.id]?.status ?? item.status;
+              const currentDate = editableItems[item.id]?.deadline_date ?? "";
+              const currentTime = editableItems[item.id]?.deadline_time ?? "";
+              const saveState = saveStates[item.id] ?? "idle";
 
               return (
-                <div key={item.id} className="action-edit-row">
+                <div key={item.id} className={`action-edit-row action-save-${saveState}`}>
                   <div className="action-index">{index + 1}</div>
                   <div className="action-edit-main">
-                    <p className="action-title">{normalizeActionTitle(item.title, item.owner_name)}</p>
+                    <div className="action-card-header">
+                      <p className="action-title">{normalizeActionTitle(item.title, item.owner_name)}</p>
+                      {!currentDate ? <span className="action-warning">需要补充截止日期</span> : null}
+                    </div>
                     <div className="action-edit-grid">
-                      <input
-                        value={editableItems[item.id]?.owner_name ?? item.owner_name}
-                        onChange={(event) => updateField(item.id, "owner_name", event.target.value)}
-                        aria-label="负责人"
-                      />
-                      <input
-                        value={editableItems[item.id]?.deadline ?? item.deadline}
-                        onChange={(event) => updateField(item.id, "deadline", event.target.value)}
-                        aria-label="截止时间"
-                      />
-                      <select
-                        value={currentStatus}
-                        onChange={(event) => updateField(item.id, "status", event.target.value)}
-                        aria-label="状态"
-                      >
-                        {STATUS_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="action-field">
+                        <span>负责人</span>
+                        <input
+                          value={editableItems[item.id]?.owner_name ?? item.owner_name}
+                          onChange={(event) => updateField(item.id, "owner_name", event.target.value)}
+                        />
+                      </label>
+                      <label className="action-field">
+                        <span>截止日期</span>
+                        <input
+                          type="date"
+                          value={currentDate}
+                          onChange={(event) => updateField(item.id, "deadline_date", event.target.value)}
+                        />
+                      </label>
+                      <label className="action-field">
+                        <span>截止时间</span>
+                        <input
+                          type="time"
+                          value={currentTime}
+                          onChange={(event) => updateField(item.id, "deadline_time", event.target.value)}
+                        />
+                      </label>
+                      <label className="action-field">
+                        <span>状态</span>
+                        <select value={currentStatus} onChange={(event) => updateField(item.id, "status", event.target.value)}>
+                          {STATUS_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                   </div>
-                  <button className="secondary" onClick={() => handleActionItemSave(item.id)}>
-                    保存
+                  <button
+                    className="secondary action-save-button"
+                    disabled={saveState === "saving"}
+                    onClick={() => handleActionItemSave(item.id)}
+                  >
+                    {getSaveButtonText(saveState)}
                   </button>
                 </div>
               );

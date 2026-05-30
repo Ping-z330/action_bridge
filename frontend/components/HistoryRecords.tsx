@@ -7,6 +7,7 @@ import { MeetingListItem } from "../lib/types";
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -15,12 +16,15 @@ function formatDateTime(value: string) {
   }).format(new Date(value));
 }
 
-function getClosureLabel(status: string) {
-  return status === "closed" ? "已完成闭环" : "执行中";
+function getClosureLabel(meeting: MeetingListItem) {
+  if (meeting.overdue_count > 0) return "存在风险";
+  if (meeting.closure_status === "closed") return "已完成闭环";
+  return "执行中";
 }
 
-function getClosureClass(status: string) {
-  return status === "closed" ? "status-completed" : "status-progress";
+function getClosureClass(meeting: MeetingListItem) {
+  if (meeting.overdue_count > 0) return "status-risk";
+  return meeting.closure_status === "closed" ? "status-completed" : "status-progress";
 }
 
 export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
@@ -46,6 +50,7 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
       total: meetings.length,
       actionCount: meetings.reduce((sum, meeting) => sum + meeting.action_count, 0),
       pendingCount: meetings.reduce((sum, meeting) => sum + meeting.pending_count, 0),
+      overdueCount: meetings.reduce((sum, meeting) => sum + meeting.overdue_count, 0),
       closedCount: meetings.filter((meeting) => meeting.closure_status === "closed").length,
     }),
     [meetings]
@@ -57,9 +62,9 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
         <div>
           <p className="section-label">历史记录</p>
           <h1>会议处理记录库</h1>
-          <p>沉淀每次会议的 AI 整理结果，方便回溯摘要、行动项和执行闭环状态。</p>
+          <p>沉淀每次会议的 AI 整理结果，方便回溯摘要、行动项、到期风险和执行闭环状态。</p>
         </div>
-        <Link className="primary-link" href="/">
+        <Link className="primary-link" href="/" prefetch={false}>
           新增会议纪要
         </Link>
       </div>
@@ -76,6 +81,10 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
         <div className="task-stat-card">
           <span>未完成行动项</span>
           <strong>{stats.pendingCount}</strong>
+        </div>
+        <div className="task-stat-card danger-stat">
+          <span>已逾期行动项</span>
+          <strong>{stats.overdueCount}</strong>
         </div>
         <div className="task-stat-card">
           <span>已完成闭环</span>
@@ -109,24 +118,24 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
                 <div className="history-record-main">
                   <div className="history-record-title">
                     <h3>{meeting.title}</h3>
-                    <span className={`status-chip ${getClosureClass(meeting.closure_status)}`}>
-                      {getClosureLabel(meeting.closure_status)}
-                    </span>
+                    <span className={`status-chip ${getClosureClass(meeting)}`}>{getClosureLabel(meeting)}</span>
                   </div>
                   <p>{meeting.summary}</p>
                   <div className="history-meta">
                     <span>创建时间：{formatDateTime(meeting.created_at)}</span>
                     <span>行动项：{meeting.action_count}</span>
                     <span>未完成：{meeting.pending_count}</span>
+                    <span>今日到期：{meeting.due_today_count}</span>
+                    <span>已逾期：{meeting.overdue_count}</span>
                     <span>已完成：{meeting.completed_count}</span>
                   </div>
                 </div>
 
                 <div className="history-actions">
-                  <Link className="secondary-link" href={`/meetings/${meeting.id}`}>
+                  <Link className="secondary-link" href={`/meetings/${meeting.id}`} prefetch={false}>
                     查看详情
                   </Link>
-                  <Link className="primary-link" href="/tasks">
+                  <Link className="primary-link" href="/tasks" prefetch={false}>
                     查看任务
                   </Link>
                 </div>

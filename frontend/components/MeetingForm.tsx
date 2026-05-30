@@ -30,7 +30,7 @@ export function MeetingForm() {
       }
 
       const meeting = await response.json();
-      router.push(`/meetings/${meeting.id}`);
+      router.push(`/?meetingId=${meeting.id}`);
       router.refresh();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "发生未知错误");
@@ -44,7 +44,7 @@ export function MeetingForm() {
       <div className="work-card-header">
         <div>
           <p className="step-title">1. 会议输入</p>
-          <p className="header-note">粘贴会议记录后，AI 会生成结构化纪要。</p>
+          <p className="header-note">粘贴会议记录后，AI 会生成结构化纪要并在右侧展示。</p>
         </div>
       </div>
 
@@ -82,7 +82,7 @@ export function MeetingForm() {
         {submitting ? "AI 整理中..." : "AI 生成会议纪要"}
       </button>
 
-      <p className="form-footnote">AI 将自动提取会议摘要、关键决策、行动项和风险点。</p>
+      <p className="form-footnote">生成后不会跳离当前页面，右侧会直接展示整理结果。</p>
     </form>
   );
 }

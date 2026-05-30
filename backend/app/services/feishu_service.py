@@ -4,6 +4,7 @@ import httpx
 
 from app.core.config import FEISHU_WEBHOOK_URL
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
+from app.services.due_status_service import get_due_status, get_due_status_label
 
 
 class FeishuDeliveryError(Exception):
@@ -130,6 +131,7 @@ def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dic
                 _markdown_block(f"**{_normalize_action_title(item.title, item.owner_name)}**"),
                 _markdown_block(f"👤 负责人：{item.owner_name}"),
                 _markdown_block(f"⏰ **截止日期：{item.deadline}**"),
+                _markdown_block(f"🚦 到期风险：{get_due_status_label(get_due_status(item.deadline))}"),
                 _markdown_block(f"📌 状态：{_get_status_label(item.status)}"),
             ]
         )

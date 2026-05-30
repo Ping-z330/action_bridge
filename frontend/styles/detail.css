@@ -14,13 +14,27 @@
 
 .action-edit-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 14px;
   align-items: start;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--surface-soft);
-  padding: 12px;
+  padding: 16px;
+}
+
+.action-save-saving {
+  border-color: var(--primary);
+}
+
+.action-save-saved {
+  border-color: var(--success);
+  background: var(--success-soft);
+}
+
+.action-save-error {
+  border-color: #fecaca;
+  background: var(--danger-soft);
 }
 
 .action-index {
@@ -37,25 +51,73 @@
 
 .action-edit-main {
   display: grid;
+  gap: 14px;
+}
+
+.action-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
 .action-title {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.action-warning {
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  padding: 4px 9px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .action-edit-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-field {
+  display: grid;
+  gap: 6px;
+}
+
+.action-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-save-button {
+  align-self: end;
+  min-width: 72px;
+}
+
+.action-save-saved .action-save-button {
+  border-color: var(--success);
+  background: var(--success);
+  color: #ffffff;
+}
+
+.action-save-error .action-save-button {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 @media (max-width: 760px) {
   .action-edit-row,
   .action-edit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .action-card-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

@@ -30,7 +30,7 @@
 
 .task-stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -53,6 +53,26 @@
 .task-stat-card strong {
   color: var(--text);
   font-size: 28px;
+}
+
+.danger-stat strong {
+  color: var(--danger);
+}
+
+.risk-banner {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  padding: 14px 16px;
+  font-weight: 700;
+}
+
+.risk-banner-danger {
+  border-color: #fecaca;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .task-table-card {
@@ -93,7 +113,7 @@
 }
 
 .task-table {
-  min-width: 980px;
+  min-width: 1120px;
 }
 
 .task-title-cell {
@@ -102,9 +122,19 @@
   font-weight: 700;
 }
 
-.deadline-cell {
-  color: var(--warning);
-  font-weight: 700;
+.deadline-display {
+  display: grid;
+  gap: 2px;
+}
+
+.deadline-display strong {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.deadline-display span {
+  color: var(--text);
+  font-size: 12px;
 }
 
 .status-completed {
@@ -120,6 +150,26 @@
 .status-progress {
   background: var(--warning-soft);
   color: var(--warning);
+}
+
+.due-overdue {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.due-today {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.due-upcoming {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.due-unknown {
+  background: var(--surface-soft);
+  color: var(--muted);
 }
 
 .table-link {

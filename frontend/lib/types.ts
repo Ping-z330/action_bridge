@@ -3,12 +3,16 @@ export type ActionItem = {
   title: string;
   owner_name: string;
   deadline: string;
+  deadline_date: string;
+  deadline_time: string;
   status: string;
 };
 
 export type ActionItemListItem = ActionItem & {
   meeting_id: number;
   meeting_title: string;
+  due_status: string;
+  due_status_label: string;
   created_at: string;
 };
 
@@ -30,6 +34,8 @@ export type MeetingListItem = {
   action_count: number;
   pending_count: number;
   completed_count: number;
+  due_today_count: number;
+  overdue_count: number;
   closure_status: string;
 };
 

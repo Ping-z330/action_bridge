@@ -23,4 +23,6 @@ def test_list_meetings_includes_history_counts(client) -> None:
     assert meetings[0]["action_count"] == 2
     assert meetings[0]["pending_count"] == 2
     assert meetings[0]["completed_count"] == 0
+    assert "due_today_count" in meetings[0]
+    assert "overdue_count" in meetings[0]
     assert meetings[0]["closure_status"] == "open"

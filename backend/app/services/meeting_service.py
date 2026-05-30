@@ -5,10 +5,13 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.action_item import ActionItem
 from app.models.meeting import Meeting
 from app.models.task import Task
+from app.core.time import ensure_utc
 from app.schemas.action_item import ActionItemUpdate
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
 from app.schemas.task_result import ActionItemListItem
+from app.services.deadline_service import build_deadline_text, normalize_deadline
+from app.services.due_status_service import get_due_status, get_due_status_from_date, get_due_status_label
 from app.services.feishu_service import FeishuDeliveryError, send_follow_up_summary, send_meeting_summary
 from app.services.parser_service import parse_transcript
 
@@ -38,12 +41,15 @@ def create_meeting_with_actions(db: Session, payload: MeetingCreate) -> MeetingR
         meeting.decisions = json.dumps(parsed.decisions)
 
         for item in parsed.action_items:
+            deadline_date, deadline_time = normalize_deadline(item.deadline, meeting.created_at)
             db.add(
                 ActionItem(
                     meeting_id=meeting.id,
                     title=item.title,
                     owner_name=item.owner_name,
                     deadline=item.deadline,
+                    deadline_date=deadline_date,
+                    deadline_time=deadline_time,
                     status=item.status,
                 )
             )
@@ -73,6 +79,22 @@ def list_meetings(db: Session) -> list[MeetingListItem]:
         action_count = len(meeting.action_items)
         completed_count = len([item for item in meeting.action_items if item.status == "completed"])
         pending_count = action_count - completed_count
+        due_today_count = len(
+            [
+                item
+                for item in meeting.action_items
+                if item.status != "completed"
+                and _get_action_item_due_status(item) == "due_today"
+            ]
+        )
+        overdue_count = len(
+            [
+                item
+                for item in meeting.action_items
+                if item.status != "completed"
+                and _get_action_item_due_status(item) == "overdue"
+            ]
+        )
         closure_status = "closed" if action_count > 0 and pending_count == 0 else "open"
 
         results.append(
@@ -80,10 +102,12 @@ def list_meetings(db: Session) -> list[MeetingListItem]:
                 id=meeting.id,
                 title=meeting.title,
                 summary=meeting.summary,
-                created_at=meeting.created_at,
+                created_at=ensure_utc(meeting.created_at),
                 action_count=action_count,
                 pending_count=pending_count,
                 completed_count=completed_count,
+                due_today_count=due_today_count,
+                overdue_count=overdue_count,
                 closure_status=closure_status,
             )
         )
@@ -99,19 +123,31 @@ def list_action_items(db: Session) -> list[ActionItemListItem]:
         .all()
     )
 
-    return [
-        ActionItemListItem(
-            id=action_item.id,
-            meeting_id=action_item.meeting_id,
-            meeting_title=meeting_title,
-            title=action_item.title,
-            owner_name=action_item.owner_name,
-            deadline=action_item.deadline,
-            status=action_item.status,
-            created_at=action_item.created_at,
+    results: list[ActionItemListItem] = []
+    for action_item, meeting_title in rows:
+        due_status = (
+            "completed"
+            if action_item.status == "completed"
+            else _get_action_item_due_status(action_item)
         )
-        for action_item, meeting_title in rows
-    ]
+        results.append(
+            ActionItemListItem(
+                id=action_item.id,
+                meeting_id=action_item.meeting_id,
+                meeting_title=meeting_title,
+                title=action_item.title,
+                owner_name=action_item.owner_name,
+                deadline=action_item.deadline,
+                deadline_date=action_item.deadline_date or "",
+                deadline_time=action_item.deadline_time or "",
+                status=action_item.status,
+                due_status=due_status,
+                due_status_label=get_due_status_label(due_status),
+                created_at=ensure_utc(action_item.created_at),
+            )
+        )
+
+    return results
 
 
 def get_meeting_by_id(db: Session, meeting_id: int) -> MeetingResponse | None:
@@ -130,7 +166,7 @@ def get_meeting_by_id(db: Session, meeting_id: int) -> MeetingResponse | None:
         raw_transcript=meeting.raw_transcript,
         summary=meeting.summary,
         decisions=json.loads(meeting.decisions or "[]"),
-        created_at=meeting.created_at,
+        created_at=ensure_utc(meeting.created_at),
         action_items=meeting.action_items,
     )
 
@@ -181,7 +217,9 @@ def update_action_item(db: Session, action_item_id: int, payload: ActionItemUpda
         return None
 
     action_item.owner_name = payload.owner_name
-    action_item.deadline = payload.deadline
+    action_item.deadline_date = payload.deadline_date
+    action_item.deadline_time = payload.deadline_time
+    action_item.deadline = build_deadline_text(payload.deadline_date, payload.deadline_time, payload.deadline)
     action_item.status = payload.status
     db.commit()
 
@@ -197,3 +235,9 @@ def complete_action_item(db: Session, action_item_id: int) -> ActionItem | None:
     db.commit()
     db.refresh(action_item)
     return action_item
+
+
+def _get_action_item_due_status(action_item: ActionItem) -> str:
+    if action_item.deadline_date:
+        return get_due_status_from_date(action_item.deadline_date, action_item.status)
+    return get_due_status(action_item.deadline, action_item.created_at)

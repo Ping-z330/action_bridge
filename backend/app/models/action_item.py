@@ -15,6 +15,8 @@ class ActionItem(Base):
     title: Mapped[str] = mapped_column(String(255))
     owner_name: Mapped[str] = mapped_column(String(120), default="Unassigned")
     deadline: Mapped[str] = mapped_column(String(32), default="TBD")
+    deadline_date: Mapped[str] = mapped_column(String(10), default="")
+    deadline_time: Mapped[str] = mapped_column(String(5), default="")
     status: Mapped[str] = mapped_column(String(32), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

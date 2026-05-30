@@ -48,7 +48,8 @@ def test_build_meeting_card_payload_uses_interactive_card() -> None:
     assert elements[3]["content"] == "**前端更新落地页文案**"
     assert elements[4]["content"] == "👤 负责人：前端同学"
     assert elements[5]["content"] == "⏰ **截止日期：周三**"
-    assert elements[6]["content"] == "📌 状态：进行中"
+    assert elements[6]["content"].startswith("🚦 到期风险：")
+    assert elements[7]["content"] == "📌 状态：进行中"
 
 
 def test_build_meeting_card_payload_keeps_status_updates_in_backend() -> None:

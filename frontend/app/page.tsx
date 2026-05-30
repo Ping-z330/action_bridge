@@ -19,7 +19,7 @@ function ResultPreview({ meeting }: { meeting?: Meeting }) {
       <div className="work-card-header">
         <div>
           <p className="step-title">2. AI 整理结果</p>
-          <p className="header-note">展示最近一次会议的完整整理结果，可进入详情页继续编辑。</p>
+          <p className="header-note">生成后会停留在当前页面，右侧直接展示本次会议的整理结果。</p>
         </div>
         {meeting ? <span className="ok-dot">已就绪</span> : null}
       </div>
@@ -99,16 +99,20 @@ function ResultPreview({ meeting }: { meeting?: Meeting }) {
   );
 }
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: { meetingId?: string };
+}) {
   const meetings = await fetchMeetings().catch(() => []);
-  const latestMeetingId = meetings[0]?.id?.toString();
-  const latestMeeting = latestMeetingId ? await fetchMeeting(latestMeetingId).catch(() => undefined) : undefined;
+  const selectedMeetingId = searchParams?.meetingId ?? meetings[0]?.id?.toString();
+  const selectedMeeting = selectedMeetingId ? await fetchMeeting(selectedMeetingId).catch(() => undefined) : undefined;
 
   return (
     <AppShell active="meetings">
       <section className="workspace-board">
         <MeetingForm />
-        <ResultPreview meeting={latestMeeting} />
+        <ResultPreview meeting={selectedMeeting} />
       </section>
     </AppShell>
   );
