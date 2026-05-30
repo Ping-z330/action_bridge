@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { ActionItem, FollowUpRunResponse, Meeting } from "../lib/types";
 
@@ -75,6 +76,7 @@ function getSaveButtonText(state: SaveState) {
 }
 
 export function MeetingDetail({ meeting }: { meeting: Meeting }) {
+  const router = useRouter();
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [followUpStatus, setFollowUpStatus] = useState<string | null>(null);
   const [batchFollowUpStatus, setBatchFollowUpStatus] = useState<string | null>(null);
@@ -156,6 +158,7 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
     setEditableItems(buildEditableState(updatedMeeting.action_items));
     setSaveStatus("行动项已更新。");
     setSaveStates((current) => ({ ...current, [actionItemId]: "saved" }));
+    router.refresh();
 
     window.setTimeout(() => {
       setSaveStates((current) => ({ ...current, [actionItemId]: "idle" }));

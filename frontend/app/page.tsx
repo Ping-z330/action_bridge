@@ -5,12 +5,25 @@ import { MeetingForm } from "../components/MeetingForm";
 import { fetchMeeting, fetchMeetings } from "../lib/api";
 import { Meeting } from "../lib/types";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "待处理",
+  in_progress: "进行中",
+  completed: "已完成",
+  failed: "有风险",
+};
+
 function getStatusLabel(status: string) {
-  return status === "completed" ? "已完成" : "待处理";
+  return STATUS_LABELS[status] ?? status;
 }
 
 function getStatusClass(status: string) {
-  return status === "completed" ? "status-completed" : "status-pending";
+  if (status === "completed") return "status-completed";
+  if (status === "failed") return "status-risk";
+  if (status === "in_progress") return "status-progress";
+  return "status-pending";
 }
 
 function ResultPreview({ meeting }: { meeting?: Meeting }) {
