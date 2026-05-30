@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { CSSProperties, useMemo, useState } from "react";
 
-import { MeetingListItem } from "../lib/types";
+import { ActionItemListItem, MeetingListItem } from "../lib/types";
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -27,7 +27,17 @@ function getClosureClass(meeting: MeetingListItem) {
   return meeting.closure_status === "closed" ? "status-completed" : "status-progress";
 }
 
-export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
+function getPercent(part: number, total: number) {
+  if (total === 0) return 0;
+  return Math.round((part / total) * 1000) / 10;
+}
+
+type HistoryRecordsProps = {
+  meetings: MeetingListItem[];
+  actionItems: ActionItemListItem[];
+};
+
+export function HistoryRecords({ meetings, actionItems }: HistoryRecordsProps) {
   const [keyword, setKeyword] = useState("");
 
   const filteredMeetings = useMemo(() => {
@@ -45,52 +55,89 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
     });
   }, [keyword, meetings]);
 
-  const stats = useMemo(
-    () => ({
-      total: meetings.length,
-      actionCount: meetings.reduce((sum, meeting) => sum + meeting.action_count, 0),
-      pendingCount: meetings.reduce((sum, meeting) => sum + meeting.pending_count, 0),
-      overdueCount: meetings.reduce((sum, meeting) => sum + meeting.overdue_count, 0),
-      closedCount: meetings.filter((meeting) => meeting.closure_status === "closed").length,
-    }),
-    [meetings]
-  );
+  const stats = useMemo(() => {
+    const actionCount = actionItems.length;
+    const completedCount = actionItems.filter((item) => item.status === "completed").length;
+    const inProgressCount = actionItems.filter((item) => item.status === "in_progress").length;
+    const overdueCount = actionItems.filter((item) => item.status !== "completed" && item.due_status === "overdue").length;
+    const pendingCount = actionItems.filter((item) => item.status === "pending").length;
+    const failedCount = actionItems.filter((item) => item.status === "failed").length;
+
+    return {
+      totalMeetings: meetings.length,
+      actionCount,
+      completedCount,
+      inProgressCount,
+      overdueCount,
+      pendingCount,
+      failedCount,
+      completedRate: getPercent(completedCount, actionCount),
+      inProgressRate: getPercent(inProgressCount, actionCount),
+      overdueRate: getPercent(overdueCount, actionCount),
+      pendingRate: getPercent(pendingCount, actionCount),
+    };
+  }, [actionItems, meetings.length]);
+
+  const ringStyle = {
+    "--completed-rate": `${stats.completedRate * 3.6}deg`,
+  } as CSSProperties;
 
   return (
     <section className="history-page">
-      <div className="history-hero">
-        <div>
-          <p className="section-label">历史记录</p>
-          <h1>会议处理记录库</h1>
-          <p>沉淀每次会议的 AI 整理结果，方便回溯摘要、行动项、到期风险和执行闭环状态。</p>
+      <section className="history-overview">
+        <div className="history-overview-heading">
+          <h1>整体执行情况</h1>
+          <span>所有时间</span>
         </div>
-        <Link className="primary-link" href="/" prefetch={false}>
-          新增会议纪要
-        </Link>
-      </div>
 
-      <div className="history-stat-grid">
-        <div className="task-stat-card">
-          <span>累计会议</span>
-          <strong>{stats.total}</strong>
+        <div className="history-overview-body">
+          <div className="history-metric-grid">
+            <div className="history-metric-card">
+              <span>会议总数</span>
+              <strong>{stats.totalMeetings}</strong>
+            </div>
+            <div className="history-metric-card">
+              <span>行动项总数</span>
+              <strong>{stats.actionCount}</strong>
+            </div>
+            <div className="history-metric-card">
+              <span>已完成</span>
+              <div className="metric-value-row">
+                <strong>{stats.completedCount}</strong>
+                <em className="metric-up">{stats.completedRate}%</em>
+              </div>
+            </div>
+            <div className="history-metric-card">
+              <span>进行中</span>
+              <div className="metric-value-row">
+                <strong>{stats.inProgressCount}</strong>
+                <em className="metric-info">{stats.inProgressRate}%</em>
+              </div>
+            </div>
+            <div className="history-metric-card">
+              <span>逾期</span>
+              <div className="metric-value-row">
+                <strong>{stats.overdueCount}</strong>
+                <em className="metric-danger">{stats.overdueRate}%</em>
+              </div>
+            </div>
+            <div className="history-metric-card">
+              <span>待处理</span>
+              <div className="metric-value-row">
+                <strong>{stats.pendingCount}</strong>
+                <em className="metric-warning">{stats.pendingRate}%</em>
+              </div>
+            </div>
+          </div>
+
+          <div className="history-rate-ring" style={ringStyle}>
+            <div>
+              <strong>{stats.completedRate}%</strong>
+              <span>整体完成率</span>
+            </div>
+          </div>
         </div>
-        <div className="task-stat-card">
-          <span>行动项总数</span>
-          <strong>{stats.actionCount}</strong>
-        </div>
-        <div className="task-stat-card">
-          <span>未完成行动项</span>
-          <strong>{stats.pendingCount}</strong>
-        </div>
-        <div className="task-stat-card danger-stat">
-          <span>已逾期行动项</span>
-          <strong>{stats.overdueCount}</strong>
-        </div>
-        <div className="task-stat-card">
-          <span>已完成闭环</span>
-          <strong>{stats.closedCount}</strong>
-        </div>
-      </div>
+      </section>
 
       <div className="work-card history-list-card">
         <div className="history-toolbar">
@@ -98,12 +145,17 @@ export function HistoryRecords({ meetings }: { meetings: MeetingListItem[] }) {
             <h2>会议记录</h2>
             <p>按时间倒序展示已处理会议。</p>
           </div>
-          <input
-            className="history-search"
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
-            placeholder="搜索会议标题或摘要"
-          />
+          <div className="history-toolbar-actions">
+            <input
+              className="history-search"
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+              placeholder="搜索会议标题或摘要"
+            />
+            <Link className="primary-link" href="/" prefetch={false}>
+              新增会议纪要
+            </Link>
+          </div>
         </div>
 
         {filteredMeetings.length === 0 ? (

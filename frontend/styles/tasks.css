@@ -112,8 +112,79 @@
   max-width: 320px;
 }
 
+.meeting-task-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.meeting-task-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.meeting-task-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.meeting-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.meeting-title-row h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.meeting-task-header p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.meeting-progress {
+  display: grid;
+  gap: 8px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.meeting-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.meeting-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbe4f0;
+}
+
+.meeting-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), #4f7fe8);
+}
+
 .task-table {
-  min-width: 1120px;
+  min-width: 920px;
 }
 
 .task-title-cell {
@@ -181,6 +252,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.task-status-select {
+  min-width: 104px;
+  height: 34px;
+  padding: 0 10px;
 }
 
 .table-actions button,

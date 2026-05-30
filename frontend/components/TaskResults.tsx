@@ -19,6 +19,8 @@ const FILTERS = [
   { value: "risk", label: "风险优先" },
   { value: "all", label: "全部" },
   { value: "pending", label: "待处理" },
+  { value: "in_progress", label: "进行中" },
+  { value: "failed", label: "有风险" },
   { value: "due_today", label: "今日到期" },
   { value: "overdue", label: "已逾期" },
   { value: "completed", label: "已完成" },
@@ -109,6 +111,40 @@ function getRiskMessage(overdue: number, dueToday: number, unknown: number) {
   return "当前没有高风险任务，可以继续推进普通待处理事项。";
 }
 
+function getMeetingStatus(items: ActionItemListItem[]) {
+  if (items.length === 0) return "暂无任务";
+  if (items.every((item) => item.status === "completed")) return "已完成";
+  if (items.some((item) => item.status === "failed" || item.due_status === "overdue")) return "有风险";
+  if (items.some((item) => item.status === "in_progress")) return "进行中";
+  return "未开始";
+}
+
+function getMeetingStatusClass(status: string) {
+  if (status === "已完成") return "status-completed";
+  if (status === "有风险") return "status-risk";
+  if (status === "进行中") return "status-progress";
+  return "status-pending";
+}
+
+function matchesFilter(item: ActionItemListItem, activeFilter: string) {
+  if (activeFilter === "all") return true;
+  if (activeFilter === "risk") return item.status !== "completed" && (item.status === "failed" || item.due_status !== "upcoming");
+  if (activeFilter === "due_today") return item.due_status === "due_today";
+  if (activeFilter === "overdue") return item.due_status === "overdue";
+  return item.status === activeFilter;
+}
+
+type MeetingGroup = {
+  meetingId: number;
+  meetingTitle: string;
+  createdAt: string;
+  items: ActionItemListItem[];
+  completed: number;
+  total: number;
+  progress: number;
+  status: string;
+};
+
 export function TaskResults({ initialItems }: { initialItems: ActionItemListItem[] }) {
   const router = useRouter();
   const [items, setItems] = useState(initialItems);
@@ -116,36 +152,12 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
   const [keyword, setKeyword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
-  const filteredItems = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase();
-
-    return items
-      .filter((item) => {
-        const matchesFilter =
-          activeFilter === "all" ||
-          item.status === activeFilter ||
-          (activeFilter === "risk" && item.status !== "completed") ||
-          (activeFilter === "due_today" && item.due_status === "due_today") ||
-          (activeFilter === "overdue" && item.due_status === "overdue");
-        const matchesKeyword =
-          normalizedKeyword.length === 0 ||
-          item.title.toLowerCase().includes(normalizedKeyword) ||
-          item.owner_name.toLowerCase().includes(normalizedKeyword) ||
-          item.meeting_title.toLowerCase().includes(normalizedKeyword);
-
-        return matchesFilter && matchesKeyword;
-      })
-      .sort((a, b) => {
-        const dueDiff = (DUE_STATUS_ORDER[a.due_status] ?? 99) - (DUE_STATUS_ORDER[b.due_status] ?? 99);
-        if (dueDiff !== 0) return dueDiff;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
-  }, [activeFilter, items, keyword]);
-
   const stats = useMemo(
     () => ({
       total: items.length,
       pending: items.filter((item) => item.status === "pending").length,
+      inProgress: items.filter((item) => item.status === "in_progress").length,
+      risk: items.filter((item) => item.status === "failed" || item.due_status === "overdue").length,
       dueToday: items.filter((item) => item.due_status === "due_today").length,
       overdue: items.filter((item) => item.due_status === "overdue").length,
       unknown: items.filter((item) => item.due_status === "unknown" && item.status !== "completed").length,
@@ -153,6 +165,56 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
     }),
     [items]
   );
+
+  const meetingGroups = useMemo(() => {
+    const normalizedKeyword = keyword.trim().toLowerCase();
+    const visibleItems = items
+      .filter((item) => {
+        const matchesKeyword =
+          normalizedKeyword.length === 0 ||
+          item.title.toLowerCase().includes(normalizedKeyword) ||
+          item.owner_name.toLowerCase().includes(normalizedKeyword) ||
+          item.meeting_title.toLowerCase().includes(normalizedKeyword);
+
+        return matchesFilter(item, activeFilter) && matchesKeyword;
+      })
+      .sort((a, b) => {
+        const dueDiff = (DUE_STATUS_ORDER[a.due_status] ?? 99) - (DUE_STATUS_ORDER[b.due_status] ?? 99);
+        if (dueDiff !== 0) return dueDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
+    const groups = new Map<number, ActionItemListItem[]>();
+
+    for (const item of visibleItems) {
+      groups.set(item.meeting_id, [...(groups.get(item.meeting_id) ?? []), item]);
+    }
+
+    return Array.from(groups.entries())
+      .map(([meetingId, groupItems]): MeetingGroup => {
+        const completed = groupItems.filter((item) => item.status === "completed").length;
+        const total = groupItems.length;
+        const status = getMeetingStatus(groupItems);
+
+        return {
+          meetingId,
+          meetingTitle: groupItems[0]?.meeting_title ?? "未命名会议",
+          createdAt: groupItems[0]?.created_at ?? "",
+          items: groupItems,
+          completed,
+          total,
+          progress: total === 0 ? 0 : Math.round((completed / total) * 100),
+          status,
+        };
+      })
+      .sort((a, b) => {
+        const statusDiff =
+          (a.status === "有风险" ? 0 : a.status === "进行中" ? 1 : a.status === "未开始" ? 2 : 3) -
+          (b.status === "有风险" ? 0 : b.status === "进行中" ? 1 : b.status === "未开始" ? 2 : 3);
+        if (statusDiff !== 0) return statusDiff;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }, [activeFilter, items, keyword]);
 
   async function updateStatus(item: ActionItemListItem, status: string) {
     setMessage("正在更新任务状态...");
@@ -163,6 +225,8 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
       body: JSON.stringify({
         owner_name: item.owner_name,
         deadline: item.deadline,
+        deadline_date: item.deadline_date,
+        deadline_time: item.deadline_time,
         status,
       }),
     });
@@ -194,8 +258,8 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
       <div className="tasks-hero">
         <div>
           <p className="section-label">任务结果</p>
-          <h1>会议行动项执行中心</h1>
-          <p>集中查看 AI 从会议纪要中提取的行动项，优先处理逾期、今日到期和截止时间待确认的任务。</p>
+          <h1>会议行动项执行看板</h1>
+          <p>按会议归组查看所有行动项，快速判断每个项目的完成进度、风险状态和当前负责人。</p>
         </div>
         <Link className="primary-link" href="/" prefetch={false}>
           新增会议纪要
@@ -212,12 +276,12 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
           <strong>{stats.pending}</strong>
         </div>
         <div className="task-stat-card">
-          <span>今日到期</span>
-          <strong>{stats.dueToday}</strong>
+          <span>进行中</span>
+          <strong>{stats.inProgress}</strong>
         </div>
         <div className="task-stat-card danger-stat">
-          <span>已逾期</span>
-          <strong>{stats.overdue}</strong>
+          <span>有风险</span>
+          <strong>{stats.risk}</strong>
         </div>
         <div className="task-stat-card">
           <span>已完成</span>
@@ -253,73 +317,103 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
 
         {message ? <p className="status-message">{message}</p> : null}
 
-        {filteredItems.length === 0 ? (
+        {meetingGroups.length === 0 ? (
           <div className="empty-result">
             <p className="empty-title">暂无匹配任务</p>
-            <p>可以回到会议处理页生成新的会议纪要，或切换筛选条件查看其他任务。</p>
+            <p>可以回到会议处理页生成新的会议纪要，或切换筛选条件查看其它任务。</p>
           </div>
         ) : (
-          <table className="work-table task-table">
-            <thead>
-              <tr>
-                <th>任务目标</th>
-                <th>负责人</th>
-                <th>截止时间</th>
-                <th>到期风险</th>
-                <th>状态</th>
-                <th>来源会议</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.map((item) => {
-                const deadlineDisplay = formatDeadlineDisplay(item);
-                return (
-                  <tr key={item.id}>
-                    <td className="task-title-cell">{normalizeActionTitle(item.title, item.owner_name)}</td>
-                    <td>{item.owner_name}</td>
-                    <td>
-                      <div className="deadline-display">
-                        <strong>{deadlineDisplay.date}</strong>
-                        <span>{deadlineDisplay.detail}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`status-chip ${getDueStatusClass(item.due_status)}`}>
-                        {item.due_status_label}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`status-chip ${getStatusClass(item.status)}`}>{getStatusLabel(item.status)}</span>
-                    </td>
-                    <td>
-                      <Link className="table-link" href={`/meetings/${item.meeting_id}`} prefetch={false}>
-                        {item.meeting_title}
-                      </Link>
-                    </td>
-                    <td>{formatDateTime(item.created_at)}</td>
-                    <td>
-                      <div className="table-actions">
-                        {item.status === "completed" ? (
-                          <button className="secondary" type="button" onClick={() => updateStatus(item, "pending")}>
-                            设为待处理
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => updateStatus(item, "completed")}>
-                            标记完成
-                          </button>
-                        )}
-                        <Link className="secondary-link" href={`/meetings/${item.meeting_id}`} prefetch={false}>
-                          查看会议
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="meeting-task-groups">
+            {meetingGroups.map((group) => (
+              <section className="meeting-task-card" key={group.meetingId}>
+                <div className="meeting-task-header">
+                  <div>
+                    <div className="meeting-title-row">
+                      <h2>{group.meetingTitle}</h2>
+                      <span className={`status-chip ${getMeetingStatusClass(group.status)}`}>{group.status}</span>
+                    </div>
+                    <p>
+                      创建时间：{group.createdAt ? formatDateTime(group.createdAt) : "待确认"} · 任务进度：
+                      {group.completed}/{group.total}
+                    </p>
+                  </div>
+                  <Link className="secondary-link" href={`/meetings/${group.meetingId}`} prefetch={false}>
+                    查看会议
+                  </Link>
+                </div>
+
+                <div className="meeting-progress">
+                  <div className="meeting-progress-meta">
+                    <span>完成率 {group.progress}%</span>
+                    <span>{group.total - group.completed} 项待推进</span>
+                  </div>
+                  <div className="meeting-progress-track">
+                    <span style={{ width: `${group.progress}%` }} />
+                  </div>
+                </div>
+
+                <table className="work-table task-table">
+                  <thead>
+                    <tr>
+                      <th>任务目标</th>
+                      <th>负责人</th>
+                      <th>截止时间</th>
+                      <th>到期风险</th>
+                      <th>状态</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.items.map((item) => {
+                      const deadlineDisplay = formatDeadlineDisplay(item);
+                      return (
+                        <tr key={item.id}>
+                          <td className="task-title-cell">{normalizeActionTitle(item.title, item.owner_name)}</td>
+                          <td>{item.owner_name}</td>
+                          <td>
+                            <div className="deadline-display">
+                              <strong>{deadlineDisplay.date}</strong>
+                              <span>{deadlineDisplay.detail}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`status-chip ${getDueStatusClass(item.due_status)}`}>
+                              {item.due_status_label}
+                            </span>
+                          </td>
+                          <td>
+                            <select
+                              className="task-status-select"
+                              value={item.status}
+                              onChange={(event) => updateStatus(item, event.target.value)}
+                            >
+                              <option value="pending">待处理</option>
+                              <option value="in_progress">进行中</option>
+                              <option value="failed">有风险</option>
+                              <option value="completed">已完成</option>
+                            </select>
+                          </td>
+                          <td>
+                            <div className="table-actions">
+                              {item.status === "completed" ? (
+                                <button className="secondary" type="button" onClick={() => updateStatus(item, "pending")}>
+                                  设为待处理
+                                </button>
+                              ) : (
+                                <button type="button" onClick={() => updateStatus(item, "completed")}>
+                                  标记完成
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </section>
+            ))}
+          </div>
         )}
       </div>
     </section>
