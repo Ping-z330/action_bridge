@@ -17,6 +17,11 @@ class FeishuDoneCommand:
     action_item_id: int
 
 
+@dataclass(frozen=True)
+class FeishuTasksCommand:
+    limit: int = 10
+
+
 def extract_challenge(payload: dict[str, Any]) -> str | None:
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
@@ -108,6 +113,18 @@ def extract_done_command(payload: dict[str, Any]) -> FeishuDoneCommand | None:
         raise ValueError("Invalid /done command. action_item_id must be a number.") from exc
 
     return FeishuDoneCommand(action_item_id=action_item_id)
+
+
+def extract_tasks_command(payload: dict[str, Any]) -> FeishuTasksCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_start = text.find("/tasks")
+    if command_start < 0:
+        return None
+
+    return FeishuTasksCommand()
 
 
 def _extract_text(payload: dict[str, Any]) -> str | None:

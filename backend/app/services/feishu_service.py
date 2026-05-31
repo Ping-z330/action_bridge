@@ -5,6 +5,7 @@ import httpx
 
 from app.core.config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DEFAULT_CHAT_ID, FEISHU_WEBHOOK_URL
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
+from app.schemas.task_result import ActionItemListItem
 from app.services.due_status_service import get_due_status, get_due_status_label
 
 
@@ -30,8 +31,13 @@ def send_action_item_completed_notice(action_item_id: int, title: str, owner_nam
     return "行动项完成通知已发送到飞书。"
 
 
+def send_open_tasks_summary(items: Iterable[ActionItemListItem]) -> str:
+    payload = _build_open_tasks_payload(items)
+    _deliver_card_payload(payload)
+    return "未完成任务列表已发送到飞书。"
+
+
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
-    """Parse the action payload sent by Feishu interactive cards."""
     value = (
         payload.get("action", {}).get("value")
         or payload.get("event", {}).get("action", {}).get("value")
@@ -157,9 +163,7 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
         ]
         template = "orange"
     else:
-        body_elements = [
-            _markdown_block("**📍 待跟进行动项**\n当前所有行动项都已完成，无需继续跟进。"),
-        ]
+        body_elements = [_markdown_block("**📍 待跟进行动项**\n当前所有行动项都已完成，无需继续跟进。")]
         template = "green"
 
     return {
@@ -202,6 +206,76 @@ def _build_action_item_completed_payload(action_item_id: int, title: str, owner_
             },
         },
     }
+
+
+def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, Any]:
+    materialized = [item for item in items if item.status != "completed"]
+    visible_items = materialized[:10]
+    overdue_count = len([item for item in materialized if item.due_status == "overdue"])
+    due_today_count = len([item for item in materialized if item.due_status == "due_today"])
+    template = "red" if overdue_count else "orange" if due_today_count else "blue"
+
+    if visible_items:
+        elements = [
+            _markdown_block(
+                "\n".join(
+                    [
+                        f"**当前未完成任务：{len(materialized)} 项**",
+                        f"已逾期：{overdue_count} 项",
+                        f"今日到期：{due_today_count} 项",
+                        "完成任务可直接发送：`/done 任务ID`",
+                    ]
+                )
+            ),
+            _divider(),
+            *_build_open_task_elements(visible_items),
+        ]
+        if len(materialized) > len(visible_items):
+            elements.append(_divider())
+            elements.append(_markdown_block(f"还有 {len(materialized) - len(visible_items)} 项未展示，请到 ActionBridge 任务结果页查看。"))
+    else:
+        elements = [_markdown_block("当前没有未完成任务，执行闭环状态良好。")]
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "📋 当前未完成任务"},
+                "template": template,
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": elements,
+            },
+        },
+    }
+
+
+def _build_open_task_elements(items: Iterable[ActionItemListItem]) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = []
+
+    for item in items:
+        title = _normalize_action_title(item.title, item.owner_name)
+        risk_prefix = "🚨" if item.due_status == "overdue" else "⏰" if item.due_status == "due_today" else "📌"
+        elements.extend(
+            [
+                _markdown_block(f"**{risk_prefix} #{item.id} {title}**"),
+                _markdown_block(f"来源会议：{item.meeting_title}"),
+                _markdown_block(f"负责人：{item.owner_name}"),
+                _markdown_block(f"截止时间：**{item.deadline or '待确认'}**"),
+                _markdown_block(f"状态：{_get_status_label(item.status)} · 风险：{item.due_status_label}"),
+                _markdown_block(f"操作：`/done {item.id}`"),
+            ]
+        )
+        elements.append(_divider())
+
+    if elements:
+        elements.pop()
+
+    return elements
 
 
 def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dict[str, Any]]:

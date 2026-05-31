@@ -2,9 +2,11 @@ import json
 from datetime import UTC, datetime
 
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
+from app.schemas.task_result import ActionItemListItem
 from app.services.feishu_service import (
     _build_follow_up_card_payload,
     _build_meeting_card_payload,
+    _build_open_tasks_payload,
     _post_app_bot_card,
     extract_card_callback_action,
 )
@@ -34,6 +36,28 @@ def build_meeting() -> MeetingResponse:
                 status="completed",
             ),
         ],
+    )
+
+
+def build_task_item(
+    item_id: int,
+    status: str,
+    due_status: str,
+    due_status_label: str,
+) -> ActionItemListItem:
+    return ActionItemListItem(
+        id=item_id,
+        meeting_id=1,
+        meeting_title="官网改版上线协调会",
+        title="Action: 前端修复移动端导航栏错位问题",
+        owner_name="前端同学",
+        deadline="2026-06-01 18:00",
+        deadline_date="2026-06-01",
+        deadline_time="18:00",
+        status=status,
+        due_status=due_status,
+        due_status_label=due_status_label,
+        created_at=datetime.now(UTC),
     )
 
 
@@ -73,6 +97,28 @@ def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
     assert payload["msg_type"] == "interactive"
     assert "前端更新落地页文案" in combined
     assert "测试补充回归用例" not in combined
+
+
+def test_build_open_tasks_payload_highlights_risk_and_done_command() -> None:
+    payload = _build_open_tasks_payload(
+        [
+            build_task_item(12, "pending", "overdue", "已逾期"),
+            build_task_item(13, "in_progress", "due_today", "今日到期"),
+            build_task_item(14, "completed", "completed", "已完成"),
+        ]
+    )
+
+    assert payload["msg_type"] == "interactive"
+    assert payload["card"]["header"]["template"] == "red"
+
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "当前未完成任务：2 项" in combined
+    assert "已逾期：1 项" in combined
+    assert "今日到期：1 项" in combined
+    assert "🚨 #12 前端修复移动端导航栏错位问题" in combined
+    assert "操作：`/done 12`" in combined
+    assert "#14" not in combined
 
 
 def test_post_app_bot_card_sends_interactive_message(monkeypatch) -> None:

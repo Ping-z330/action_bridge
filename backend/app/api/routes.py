@@ -15,6 +15,7 @@ from app.services.feishu_event_service import (
     extract_done_command,
     extract_event_dedup_key,
     extract_meeting_command,
+    extract_tasks_command,
     mark_event_processing,
 )
 from app.services.feishu_service import (
@@ -22,6 +23,7 @@ from app.services.feishu_service import (
     extract_card_callback_action,
     send_action_item_completed_notice,
     send_meeting_summary,
+    send_open_tasks_summary,
 )
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
@@ -132,11 +134,12 @@ def handle_feishu_events(
 
     try:
         done_command = extract_done_command(payload)
+        tasks_command = extract_tasks_command(payload)
         meeting_command = extract_meeting_command(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if not done_command and not meeting_command:
+    if not done_command and not tasks_command and not meeting_command:
         return {"status": "ignored", "message": "No supported command found."}
 
     dedup_key = extract_event_dedup_key(payload)
@@ -161,6 +164,28 @@ def handle_feishu_events(
             "status": "completed",
             "action_item_id": action_item.id,
             "message": "Action item marked as completed.",
+        }
+
+    if tasks_command:
+        open_tasks = [
+            item
+            for item in list_action_items(db)
+            if item.status in {"pending", "in_progress", "failed"}
+        ]
+
+        try:
+            send_open_tasks_summary(open_tasks[: tasks_command.limit])
+        except FeishuDeliveryError as exc:
+            return {
+                "status": "listed",
+                "task_count": len(open_tasks),
+                "message": f"Open tasks listed, but Feishu delivery failed: {exc}",
+            }
+
+        return {
+            "status": "listed",
+            "task_count": len(open_tasks),
+            "message": "Open tasks summary sent.",
         }
 
     try:
