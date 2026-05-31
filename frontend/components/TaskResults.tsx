@@ -99,15 +99,9 @@ function formatDeadlineDisplay(item: ActionItemListItem) {
 }
 
 function getRiskMessage(overdue: number, dueToday: number, unknown: number) {
-  if (overdue > 0) {
-    return `存在 ${overdue} 个已逾期任务，请优先处理。`;
-  }
-  if (dueToday > 0) {
-    return `今天有 ${dueToday} 个任务到期，请及时跟进。`;
-  }
-  if (unknown > 0) {
-    return `有 ${unknown} 个任务缺少明确截止时间，建议先补全。`;
-  }
+  if (overdue > 0) return `存在 ${overdue} 个已逾期任务，请优先处理。`;
+  if (dueToday > 0) return `今天有 ${dueToday} 个任务到期，请及时跟进。`;
+  if (unknown > 0) return `有 ${unknown} 个任务缺少明确截止时间，建议先补全。`;
   return "当前没有高风险任务，可以继续推进普通待处理事项。";
 }
 
@@ -172,6 +166,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
       .filter((item) => {
         const matchesKeyword =
           normalizedKeyword.length === 0 ||
+          item.id.toString().includes(normalizedKeyword) ||
           item.title.toLowerCase().includes(normalizedKeyword) ||
           item.owner_name.toLowerCase().includes(normalizedKeyword) ||
           item.meeting_title.toLowerCase().includes(normalizedKeyword);
@@ -185,7 +180,6 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
       });
 
     const groups = new Map<number, ActionItemListItem[]>();
-
     for (const item of visibleItems) {
       groups.set(item.meeting_id, [...(groups.get(item.meeting_id) ?? []), item]);
     }
@@ -311,7 +305,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
             className="task-search"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="搜索任务、负责人或来源会议"
+            placeholder="搜索任务、任务ID、负责人或来源会议"
           />
         </div>
 
@@ -368,7 +362,10 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
                       const deadlineDisplay = formatDeadlineDisplay(item);
                       return (
                         <tr key={item.id}>
-                          <td className="task-title-cell">{normalizeActionTitle(item.title, item.owner_name)}</td>
+                          <td className="task-title-cell">
+                            <span className="task-id-badge">#{item.id}</span>
+                            <span>{normalizeActionTitle(item.title, item.owner_name)}</span>
+                          </td>
                           <td>{item.owner_name}</td>
                           <td>
                             <div className="deadline-display">

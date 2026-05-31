@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { ActionItem, FollowUpRunResponse, Meeting } from "../lib/types";
 
@@ -219,7 +219,10 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
                   <div className="action-index">{index + 1}</div>
                   <div className="action-edit-main">
                     <div className="action-card-header">
-                      <p className="action-title">{normalizeActionTitle(item.title, item.owner_name)}</p>
+                      <div className="action-title-group">
+                        <span className="task-id-badge">#{item.id}</span>
+                        <p className="action-title">{normalizeActionTitle(item.title, item.owner_name)}</p>
+                      </div>
                       {!currentDate ? <span className="action-warning">需要补充截止日期</span> : null}
                     </div>
                     <div className="action-edit-grid">

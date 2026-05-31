@@ -2,10 +2,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-_PROCESSED_EVENT_IDS: set[str] = set()
-_MAX_PROCESSED_EVENT_IDS = 512
-
-
 @dataclass(frozen=True)
 class FeishuMeetingCommand:
     title: str
@@ -47,21 +43,6 @@ def extract_event_dedup_key(payload: dict[str, Any]) -> str | None:
             return candidate.strip()
 
     return None
-
-
-def mark_event_processing(dedup_key: str | None) -> bool:
-    """Return False when the event was already seen in this process."""
-    if not dedup_key:
-        return True
-
-    if dedup_key in _PROCESSED_EVENT_IDS:
-        return False
-
-    if len(_PROCESSED_EVENT_IDS) >= _MAX_PROCESSED_EVENT_IDS:
-        _PROCESSED_EVENT_IDS.clear()
-
-    _PROCESSED_EVENT_IDS.add(dedup_key)
-    return True
 
 
 def extract_meeting_command(payload: dict[str, Any]) -> FeishuMeetingCommand | None:

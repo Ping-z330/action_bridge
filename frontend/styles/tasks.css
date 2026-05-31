@@ -188,9 +188,26 @@
 }
 
 .task-title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   max-width: 280px;
   color: var(--text);
   font-weight: 700;
+}
+
+.task-id-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--primary);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .deadline-display {

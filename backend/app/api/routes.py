@@ -16,8 +16,8 @@ from app.services.feishu_event_service import (
     extract_event_dedup_key,
     extract_meeting_command,
     extract_tasks_command,
-    mark_event_processing,
 )
+from app.services.feishu_event_log_service import mark_feishu_event_finished, register_feishu_event
 from app.services.feishu_service import (
     FeishuDeliveryError,
     extract_card_callback_action,
@@ -156,23 +156,27 @@ def handle_feishu_events(
         return {"status": "ignored", "message": "No supported command found."}
 
     dedup_key = extract_event_dedup_key(payload)
-    if not mark_event_processing(dedup_key):
+    command_type = "done" if done_command else "tasks" if tasks_command else "meeting"
+    if not register_feishu_event(db, dedup_key, command_type):
         return {"status": "duplicated", "message": "Duplicated Feishu event ignored."}
 
     if done_command:
         action_item = complete_action_item(db, done_command.action_item_id)
         if not action_item:
+            mark_feishu_event_finished(db, dedup_key, "failed")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
 
         try:
             send_action_item_completed_notice(action_item.id, action_item.title, action_item.owner_name)
         except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
             return {
                 "status": "completed",
                 "action_item_id": action_item.id,
                 "message": f"Action item completed, but Feishu notice delivery failed: {exc}",
             }
 
+        mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "completed",
             "action_item_id": action_item.id,
@@ -189,12 +193,14 @@ def handle_feishu_events(
         try:
             send_open_tasks_summary(open_tasks[: tasks_command.limit])
         except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
             return {
                 "status": "listed",
                 "task_count": len(open_tasks),
                 "message": f"Open tasks listed, but Feishu delivery failed: {exc}",
             }
 
+        mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "listed",
             "task_count": len(open_tasks),
@@ -206,6 +212,7 @@ def handle_feishu_events(
         meeting_command.title,
         meeting_command.transcript,
     )
+    mark_feishu_event_finished(db, dedup_key, "accepted")
     return {
         "status": "accepted",
         "message": "Meeting command accepted and will be processed in background.",

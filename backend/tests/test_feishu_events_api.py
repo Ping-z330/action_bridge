@@ -1,14 +1,6 @@
 from datetime import UTC, datetime
 
-import pytest
-
 from app.schemas.meeting import MeetingResponse
-from app.services import feishu_event_service
-
-
-@pytest.fixture(autouse=True)
-def clear_feishu_event_dedup_cache() -> None:
-    feishu_event_service._PROCESSED_EVENT_IDS.clear()
 
 
 def _fake_meeting() -> MeetingResponse:
