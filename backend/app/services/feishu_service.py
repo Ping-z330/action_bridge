@@ -3,6 +3,7 @@ from typing import Any, Iterable
 
 import httpx
 
+from app.agent.schemas import ProjectProgressSummary
 from app.core.config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DEFAULT_CHAT_ID, FEISHU_WEBHOOK_URL
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
 from app.schemas.task_result import ActionItemListItem
@@ -13,28 +14,45 @@ class FeishuDeliveryError(Exception):
     pass
 
 
-def send_meeting_summary(meeting: MeetingResponse) -> str:
+def send_meeting_summary(meeting: MeetingResponse, receive_id: str | None = None) -> str:
     payload = _build_meeting_card_payload(meeting)
-    _deliver_card_payload(payload)
+    _deliver_card_payload(payload, receive_id=receive_id)
     return "会议摘要卡片已发送到飞书。"
 
 
-def send_follow_up_summary(meeting: MeetingResponse) -> str:
+def send_follow_up_summary(meeting: MeetingResponse, receive_id: str | None = None) -> str:
     payload = _build_follow_up_card_payload(meeting)
-    _deliver_card_payload(payload)
+    _deliver_card_payload(payload, receive_id=receive_id)
     return "跟进提醒卡片已发送到飞书。"
 
 
-def send_action_item_completed_notice(action_item_id: int, title: str, owner_name: str) -> str:
+def send_action_item_completed_notice(
+    action_item_id: int,
+    title: str,
+    owner_name: str,
+    receive_id: str | None = None,
+) -> str:
     payload = _build_action_item_completed_payload(action_item_id, title, owner_name)
-    _deliver_card_payload(payload)
+    _deliver_card_payload(payload, receive_id=receive_id)
     return "行动项完成通知已发送到飞书。"
 
 
-def send_open_tasks_summary(items: Iterable[ActionItemListItem]) -> str:
+def send_open_tasks_summary(items: Iterable[ActionItemListItem], receive_id: str | None = None) -> str:
     payload = _build_open_tasks_payload(items)
-    _deliver_card_payload(payload)
+    _deliver_card_payload(payload, receive_id=receive_id)
     return "未完成任务列表已发送到飞书。"
+
+
+def send_task_detail_summary(item: ActionItemListItem, receive_id: str | None = None) -> str:
+    payload = _build_task_detail_payload(item)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务详情卡片已发送到飞书。"
+
+
+def send_project_progress_summary(summary: ProjectProgressSummary, receive_id: str | None = None) -> str:
+    payload = _build_project_progress_payload(summary)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "项目进度总结卡片已发送到飞书。"
 
 
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
@@ -56,17 +74,18 @@ def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, s
     return parsed_id, action
 
 
-def _deliver_card_payload(payload: dict[str, Any]) -> None:
-    if _is_app_bot_configured():
-        _post_app_bot_card(payload["card"])
+def _deliver_card_payload(payload: dict[str, Any], receive_id: str | None = None) -> None:
+    if _is_app_bot_configured(receive_id):
+        _post_app_bot_card(payload["card"], receive_id=receive_id)
         return
 
     _ensure_webhook_configured()
     _post_webhook_payload(payload)
 
 
-def _is_app_bot_configured() -> bool:
-    values = [FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DEFAULT_CHAT_ID]
+def _is_app_bot_configured(receive_id: str | None = None) -> bool:
+    target_receive_id = receive_id or FEISHU_DEFAULT_CHAT_ID
+    values = [FEISHU_APP_ID, FEISHU_APP_SECRET, target_receive_id]
     return all(value and not value.startswith("replace_with_") for value in values)
 
 
@@ -83,10 +102,14 @@ def _post_webhook_payload(payload: dict[str, Any]) -> None:
         raise FeishuDeliveryError(f"Failed to send message to Feishu webhook: {exc}") from exc
 
 
-def _post_app_bot_card(card: dict[str, Any]) -> None:
+def _post_app_bot_card(card: dict[str, Any], receive_id: str | None = None) -> None:
     token = _get_tenant_access_token()
+    target_receive_id = receive_id or FEISHU_DEFAULT_CHAT_ID
+    if not target_receive_id:
+        raise FeishuDeliveryError("Feishu receive_id is not configured")
+
     body = {
-        "receive_id": FEISHU_DEFAULT_CHAT_ID,
+        "receive_id": target_receive_id,
         "msg_type": "interactive",
         "content": json.dumps(card, ensure_ascii=False),
     }
@@ -249,6 +272,95 @@ def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, 
                 "direction": "vertical",
                 "padding": "12px 12px 12px 12px",
                 "elements": elements,
+            },
+        },
+    }
+
+
+def _build_task_detail_payload(item: ActionItemListItem) -> dict[str, Any]:
+    title = _normalize_action_title(item.title, item.owner_name)
+    due_status = item.due_status or get_due_status(item.deadline)
+    due_label = item.due_status_label or get_due_status_label(due_status)
+    template = (
+        "green"
+        if item.status == "completed"
+        else "red"
+        if due_status == "overdue" or item.status == "failed"
+        else "orange"
+        if due_status == "due_today"
+        else "blue"
+    )
+    operation = "已完成，无需重复操作。" if item.status == "completed" else f"`/done {item.id}`"
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"📋 任务详情 #{item.id}"},
+                "template": template,
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(f"**任务目标**\n{title}"),
+                    _markdown_block(f"**来源会议**\n{item.meeting_title}"),
+                    _markdown_block(f"**负责人**\n{item.owner_name}"),
+                    _markdown_block(f"**截止时间**\n{item.deadline or '待确认'}"),
+                    _markdown_block(f"**状态 / 风险**\n{_get_status_label(item.status)} / {due_label}"),
+                    _markdown_block(f"**操作指令**\n完成该任务：{operation}\n查看未完成列表：`/tasks`"),
+                ],
+            },
+        },
+    }
+
+
+def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str, Any]:
+    template = (
+        "red"
+        if summary.failed_count or summary.overdue_count
+        else "orange"
+        if summary.due_today_count
+        else "green"
+        if summary.total_count and summary.completed_count == summary.total_count
+        else "blue"
+    )
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"📈 项目进度 | {summary.keyword}"},
+                "template": template,
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                f"**完成率：{summary.completion_rate}%**",
+                                f"任务总数：{summary.total_count}",
+                                f"已完成：{summary.completed_count}",
+                                f"进行中：{summary.in_progress_count}",
+                                f"待处理：{summary.pending_count}",
+                                f"有风险：{summary.failed_count}",
+                                f"逾期：{summary.overdue_count}",
+                                f"今日到期：{summary.due_today_count}",
+                            ]
+                        )
+                    ),
+                    _divider(),
+                    _markdown_block(f"**结论**\n{summary.conclusion}"),
+                    _divider(),
+                    _markdown_block("**相关任务**"),
+                    *_build_open_task_elements(summary.items[:5]),
+                ],
             },
         },
     }

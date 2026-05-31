@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.schemas.meeting import MeetingResponse
 
@@ -15,12 +15,13 @@ def _fake_meeting() -> MeetingResponse:
     )
 
 
-def _meeting_event(message_id: str = "om_test_1") -> dict:
+def _meeting_event(message_id: str = "om_test_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
         "event": {
             "message": {
                 "message_id": message_id,
+                "chat_id": chat_id,
                 "message_type": "text",
                 "content": '{"text": "/meeting 每周产品同步会\\n讨论官网改版上线风险。\\nAction: 前端同学修复移动端问题。"}',
             }
@@ -28,12 +29,13 @@ def _meeting_event(message_id: str = "om_test_1") -> dict:
     }
 
 
-def _done_event(action_item_id: int, message_id: str = "om_done_1") -> dict:
+def _done_event(action_item_id: int, message_id: str = "om_done_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
         "event": {
             "message": {
                 "message_id": message_id,
+                "chat_id": chat_id,
                 "message_type": "text",
                 "content": f'{{"text": "/done {action_item_id}"}}',
             }
@@ -41,14 +43,43 @@ def _done_event(action_item_id: int, message_id: str = "om_done_1") -> dict:
     }
 
 
-def _tasks_event(message_id: str = "om_tasks_1") -> dict:
+def _tasks_event(message_id: str = "om_tasks_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
         "event": {
             "message": {
                 "message_id": message_id,
+                "chat_id": chat_id,
                 "message_type": "text",
                 "content": '{"text": "/tasks"}',
+            }
+        },
+    }
+
+
+def _natural_language_event(text: str, message_id: str = "om_agent_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": f'{{"text": "{text}"}}',
+            }
+        },
+    }
+
+
+def _task_event(action_item_id: int | str, message_id: str = "om_task_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": f'{{"text": "/task {action_item_id}"}}',
             }
         },
     }
@@ -74,10 +105,10 @@ def test_feishu_events_ignores_non_command_message(client) -> None:
 def test_feishu_events_accepts_meeting_command_in_background(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    accepted_commands: list[tuple[str, str]] = []
+    accepted_commands: list[tuple[str, str, str | None]] = []
 
-    def fake_process(title: str, transcript: str) -> None:
-        accepted_commands.append((title, transcript))
+    def fake_process(title: str, transcript: str, receive_id: str | None = None) -> None:
+        accepted_commands.append((title, transcript, receive_id))
 
     monkeypatch.setattr(routes, "process_feishu_meeting_command", fake_process)
 
@@ -94,7 +125,7 @@ def test_feishu_events_deduplicates_meeting_command(client, monkeypatch) -> None
 
     process_count = 0
 
-    def fake_process(_title: str, _transcript: str) -> None:
+    def fake_process(_title: str, _transcript: str, _receive_id: str | None = None) -> None:
         nonlocal process_count
         process_count += 1
 
@@ -124,7 +155,8 @@ def test_feishu_events_marks_action_item_done(client, monkeypatch) -> None:
     action_item_id = meeting["action_items"][0]["id"]
     sent_notices: list[int] = []
 
-    def fake_send(action_id: int, _title: str, _owner_name: str) -> str:
+    def fake_send(action_id: int, _title: str, _owner_name: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
         sent_notices.append(action_id)
         return "sent"
 
@@ -155,7 +187,8 @@ def test_feishu_events_deduplicates_done_command(client, monkeypatch) -> None:
     action_item_id = create_response.json()["action_items"][0]["id"]
     sent_count = 0
 
-    def fake_send(_action_id: int, _title: str, _owner_name: str) -> str:
+    def fake_send(_action_id: int, _title: str, _owner_name: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
         nonlocal sent_count
         sent_count += 1
         return "sent"
@@ -175,7 +208,7 @@ def test_feishu_events_deduplicates_done_command(client, monkeypatch) -> None:
 def test_feishu_events_done_missing_action_item_returns_404(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    monkeypatch.setattr(routes, "send_action_item_completed_notice", lambda *_args: "sent")
+    monkeypatch.setattr(routes, "send_action_item_completed_notice", lambda *_args, **_kwargs: "sent")
 
     response = client.post("/api/feishu/events", json=_done_event(9999))
 
@@ -200,7 +233,8 @@ def test_feishu_events_lists_open_tasks(client, monkeypatch) -> None:
     )
     sent_batches = []
 
-    def fake_send(items) -> str:
+    def fake_send(items, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
         materialized = list(items)
         sent_batches.append(materialized)
         return "sent"
@@ -220,7 +254,11 @@ def test_feishu_events_lists_empty_open_tasks(client, monkeypatch) -> None:
     import app.api.routes as routes
 
     sent_batches = []
-    monkeypatch.setattr(routes, "send_open_tasks_summary", lambda items: sent_batches.append(list(items)) or "sent")
+    monkeypatch.setattr(
+        routes,
+        "send_open_tasks_summary",
+        lambda items, receive_id=None: sent_batches.append(list(items)) or "sent",
+    )
 
     response = client.post("/api/feishu/events", json=_tasks_event())
 
@@ -230,12 +268,219 @@ def test_feishu_events_lists_empty_open_tasks(client, monkeypatch) -> None:
     assert sent_batches == [[]]
 
 
+def test_feishu_events_sends_single_task_detail(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Single task detail test",
+            "transcript": "Action: Frontend updates landing page copy before Friday.",
+        },
+    )
+    action_item_id = create_response.json()["action_items"][0]["id"]
+    sent_items = []
+
+    def fake_send(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_task_event(action_item_id))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_found"
+    assert response.json()["action_item_id"] == action_item_id
+    assert sent_items[0].id == action_item_id
+
+
+def test_feishu_events_deduplicates_single_task_command(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Single task duplicate test",
+            "transcript": "Action: QA supplements regression cases.",
+        },
+    )
+    action_item_id = create_response.json()["action_items"][0]["id"]
+    sent_count = 0
+
+    def fake_send(_item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        nonlocal sent_count
+        sent_count += 1
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    first_response = client.post("/api/feishu/events", json=_task_event(action_item_id, message_id="om_task_dup"))
+    second_response = client.post("/api/feishu/events", json=_task_event(action_item_id, message_id="om_task_dup"))
+
+    assert first_response.status_code == 200
+    assert first_response.json()["status"] == "task_found"
+    assert second_response.status_code == 200
+    assert second_response.json()["status"] == "duplicated"
+    assert sent_count == 1
+
+
+def test_feishu_events_task_missing_action_item_returns_404(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", lambda *_args, **_kwargs: "sent")
+
+    response = client.post("/api/feishu/events", json=_task_event(9999))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Action item not found"
+
+
+def test_feishu_events_rejects_invalid_task_command(client) -> None:
+    response = client.post("/api/feishu/events", json=_task_event("abc"))
+
+    assert response.status_code == 400
+    assert "Invalid /task command" in response.json()["detail"]
+
+
+def test_feishu_events_agent_lists_due_today_tasks(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Agent natural language test",
+            "transcript": "Action: Frontend fixes mobile navigation issue.",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    today = date.today().isoformat()
+    client.patch(
+        f"/api/action-items/{action_item_id}",
+        json={
+            "owner_name": "前端同学",
+            "deadline": "今天 18:00",
+            "deadline_date": today,
+            "deadline_time": "18:00",
+            "status": "pending",
+        },
+    )
+    sent_batches = []
+
+    def fake_send(items, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_batches.append(list(items))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_open_tasks_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_natural_language_event("帮我看看今天到期的任务"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_replied"
+    assert response.json()["intent"] == "query_tasks"
+    assert response.json()["task_count"] == 1
+    assert sent_batches[0][0].id == action_item_id
+
+
+def test_feishu_events_agent_updates_task_status(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Agent update test",
+            "transcript": "Action: Frontend fixes mobile navigation issue.",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    sent_items = []
+
+    def fake_send(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_natural_language_event(f"把 {action_item_id} 号任务标记完成"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_updated"
+    assert response.json()["intent"] == "update_task_status"
+    assert response.json()["action_item_id"] == action_item_id
+    assert response.json()["target_status"] == "completed"
+    assert sent_items[0].id == action_item_id
+    assert sent_items[0].status == "completed"
+
+    detail_response = client.get(f"/api/meetings/{meeting['id']}")
+    updated_item = detail_response.json()["action_items"][0]
+    assert updated_item["status"] == "completed"
+
+
+def test_feishu_events_agent_update_missing_action_item_returns_404(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", lambda *_args, **_kwargs: "sent")
+
+    response = client.post("/api/feishu/events", json=_natural_language_event("把 9999 号任务标记完成"))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Action item not found"
+
+
+def test_feishu_events_agent_sends_project_progress_summary(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    client.post(
+        "/api/meetings",
+        json={
+            "title": "官网改版上线会",
+            "transcript": "\n".join(
+                [
+                    "Action: Frontend fixes mobile navigation issue.",
+                    "Action: QA supplements regression cases.",
+                ]
+            ),
+        },
+    )
+    sent_summaries = []
+
+    def fake_send(summary, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_summaries.append(summary)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_project_progress_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_natural_language_event("官网改版进度怎么样"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_replied"
+    assert response.json()["intent"] == "summarize_project"
+    assert response.json()["task_count"] == 2
+    assert sent_summaries[0].keyword == "官网改版"
+    assert sent_summaries[0].total_count == 2
+
+
+def test_feishu_events_agent_ignores_unrelated_chat(client) -> None:
+    response = client.post("/api/feishu/events", json=_natural_language_event("大家下午好", message_id="om_agent_ignore"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
 def test_feishu_events_deduplicates_tasks_command(client, monkeypatch) -> None:
     import app.api.routes as routes
 
     sent_count = 0
 
-    def fake_send(_items) -> str:
+    def fake_send(_items, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
         nonlocal sent_count
         sent_count += 1
         return "sent"

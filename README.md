@@ -8,7 +8,7 @@ ActionBridge 是一个“会议纪要到执行闭环”的办公协作 Agent MVP
 
 - 降低会议后手动整理纪要、拆任务和跟进状态的成本。
 - 将行动项沉淀到系统中，统一管理负责人、截止时间和任务状态。
-- 通过飞书机器人接收会议纪要、发布整理结果和发送跟进提醒。
+- 通过飞书机器人接收会议纪要、发布整理结果、查询任务和更新进度。
 - 通过任务结果页和历史记录页形成可追踪、可回溯的执行闭环。
 
 ## 核心功能
@@ -20,9 +20,9 @@ ActionBridge 是一个“会议纪要到执行闭环”的办公协作 Agent MVP
 - 任务结果页：按会议分组展示任务，支持状态筛选、搜索、进度条和风险优先。
 - 历史记录页：展示会议归档、整体执行情况和完成率环形图。
 - 飞书通知：支持 Webhook 机器人，也支持自建应用机器人发送卡片到指定群。
-- 飞书事件接入：支持在飞书中发送 `/meeting` 命令自动创建会议。
+- 飞书事件接入：支持 `/meeting`、`/tasks`、`/task 任务ID`、`/done 任务ID`。
 - 自动跟进：支持扫描未完成任务，并发送飞书跟进提醒。
-- 幂等去重：对飞书事件的 `event_id/message_id` 做进程内去重，避免飞书重试导致重复创建。
+- 事件幂等去重：基于飞书 `event_id/message_id` 做数据库级去重，避免重复回调导致重复创建或重复发送。
 
 ## 功能流程
 
@@ -32,7 +32,7 @@ flowchart TD
     A --> A2[Web 上传文本文件]
     A --> A3[飞书 /meeting 消息]
 
-    A1 --> B[后端 POST /api/meetings]
+    A1 --> B[POST /api/meetings]
     A2 --> B
     A3 --> C[POST /api/feishu/events]
 
@@ -40,10 +40,10 @@ flowchart TD
     C1 -->|是| C2[忽略 duplicated]
     C1 -->|否| B
 
-    B --> D[parser_service 调用 LLM 或规则解析]
-    D --> E[生成会议摘要]
-    D --> F[提取关键决策]
-    D --> G[生成行动项]
+    B --> D[LLM 或规则解析]
+    D --> E[会议摘要]
+    D --> F[关键决策]
+    D --> G[行动项]
 
     E --> H[写入数据库]
     F --> H
@@ -51,14 +51,15 @@ flowchart TD
 
     H --> I[首页展示整理结果]
     H --> J[任务结果页推进执行]
-    H --> K[历史记录页归档]
+    H --> K[历史记录页归档统计]
     H --> L[飞书机器人发送卡片]
 
     J --> M[更新负责人/截止时间/状态]
     M --> H
 
-    H --> N[自动跟进扫描]
-    N --> O[飞书发送未完成任务提醒]
+    C --> N[/tasks 查询未完成任务]
+    C --> O[/task 任务ID 查询单个任务]
+    C --> P[/done 任务ID 标记完成]
 ```
 
 ## 页面说明
@@ -101,6 +102,7 @@ flowchart TD
         D2[action_items]
         D3[tasks]
         D4[follow_up_logs]
+        D5[feishu_event_logs]
     end
 
     subgraph External[外部服务]
@@ -131,6 +133,7 @@ flowchart TD
     B2 --> D2
     B2 --> D3
     B6 --> D4
+    B5 --> D5
 ```
 
 ## 代码结构
@@ -139,54 +142,29 @@ flowchart TD
 ActionBridge/
   backend/
     app/
-      api/
-        routes.py                    API 路由入口
-      core/
-        config.py                    环境变量配置
-        time.py                      时间工具
-      db/
-        session.py                   数据库连接
-        base.py                      模型注册
-        migrations.py                SQLite 轻量迁移
-      models/
-        meeting.py                   会议模型
-        action_item.py               行动项模型
-        task.py                      后台任务模型
-        follow_up_log.py             跟进日志模型
-      schemas/
-        meeting.py                   会议请求/响应结构
-        action_item.py               行动项更新结构
-        task_result.py               任务结果结构
-      services/
-        parser_service.py            LLM/规则解析会议纪要
-        meeting_service.py           会议、行动项、飞书发送业务逻辑
-        feishu_service.py            飞书卡片生成与发送
-        feishu_event_service.py      飞书消息事件解析与去重
-        follow_up_service.py         未完成任务扫描与提醒
+      api/routes.py                  API 路由入口
+      core/config.py                 环境变量配置
+      core/time.py                   时间工具
+      db/session.py                  数据库连接
+      db/base.py                     模型注册
+      db/migrations.py               SQLite 轻量迁移
+      models/                        SQLAlchemy 数据模型
+      schemas/                       请求/响应结构
+      services/parser_service.py     LLM/规则解析会议纪要
+      services/meeting_service.py    会议、行动项、飞书发送业务逻辑
+      services/feishu_service.py     飞书卡片生成与发送
+      services/feishu_event_service.py 飞书消息事件解析
+      services/follow_up_service.py  未完成任务扫描与提醒
     tests/                           后端自动化测试
-
   frontend/
-    app/
-      page.tsx                       首页会议处理
-      tasks/page.tsx                 任务结果页
-      history/page.tsx               历史记录页
-      meetings/[id]/page.tsx         会议详情页
-      layout.tsx                     全局布局入口
-    components/
-      AppShell.tsx                   左侧导航 + 顶部导航
-      MeetingForm.tsx                会议输入与文件上传
-      MeetingDetail.tsx              会议详情与行动项编辑
-      TaskResults.tsx                任务结果页交互
-      HistoryRecords.tsx             历史记录页交互
-    lib/
-      api.ts                         前端 API 请求
-      types.ts                       TypeScript 类型
-    styles/
-      layout.css                     框架导航样式
-      workspace.css                  首页工作台样式
-      tasks.css                      任务结果页样式
-      history.css                    历史记录页样式
-      detail.css                     会议详情页样式
+    app/page.tsx                     首页会议处理
+    app/tasks/page.tsx               任务结果页
+    app/history/page.tsx             历史记录页
+    app/meetings/[id]/page.tsx       会议详情页
+    components/                      页面组件
+    lib/api.ts                       前端 API 请求
+    lib/types.ts                     TypeScript 类型
+    styles/                          页面样式
 ```
 
 ## 后端 API
@@ -218,11 +196,37 @@ https://你的公网域名/api/feishu/events
 
 飞书第一次校验时会发送 `challenge`，后端会原样返回。
 
-### 2. 群聊或私聊发送会议纪要
+### 2. 支持的飞书指令
+
+```text
+/meeting 会议标题
+会议正文...
+```
+
+作用：创建会议，调用 LLM/规则解析会议纪要，并把会议摘要卡片发送到配置的默认群。
+
+```text
+/tasks
+```
+
+作用：查询当前未完成任务列表，机器人会发送未完成任务卡片。
+
+```text
+/task 12
+```
+
+作用：查询任务 ID 为 12 的单个任务详情，机器人会发送任务详情卡片。
+
+```text
+/done 12
+```
+
+作用：把任务 ID 为 12 的行动项标记为已完成，并发送完成通知卡片。
+
+### 3. 测试用例
 
 ```text
 /meeting 官网改版上线协调会
-
 本次会议确认官网改版将按计划在本周五上线，但移动端仍有几个体验问题需要修复。
 前端同学需要在明天下午六点前修复移动端导航栏错位问题。
 设计同学需要在周三下午三点前补齐首页 banner 的移动端切图。
@@ -231,14 +235,7 @@ https://你的公网域名/api/feishu/events
 运营同学需要在周五上午检查官网埋点是否正常上报。
 ```
 
-处理结果：
-
-- 后端创建会议记录。
-- LLM 解析摘要、决策和行动项。
-- Web 后台 `/tasks` 和 `/history` 自动出现数据。
-- 飞书机器人把会议摘要卡片发送到配置的默认群。
-
-### 3. 飞书发送方式
+### 4. 飞书发送方式
 
 系统优先使用自建应用机器人发送卡片：
 
@@ -335,21 +332,23 @@ npm run build
 - 历史记录统计
 - 截止日期与到期风险判断
 - 飞书卡片 payload
-- 飞书事件接入
-- 飞书事件幂等去重
+- 飞书 `/meeting`、`/tasks`、`/task`、`/done` 指令
+- 飞书事件数据库级幂等去重
 - 自动跟进扫描
 
 ## 演示流程
 
 1. 启动后端和前端。
 2. 打开 `http://localhost:3000`，粘贴会议纪要或上传文本文件。
-3. 点击“AI 生成会议纪要”，查看右侧整理结果。
+3. 点击“AI 生成会议纪要”，查看整理结果。
 4. 进入会议详情页，编辑行动项负责人、截止日期、截止时间和状态。
 5. 进入 `/tasks`，查看按会议分组的任务执行看板。
 6. 修改任务状态，例如从“待处理”改为“进行中”或“已完成”。
 7. 进入 `/history`，查看会议归档、整体执行情况和完成率。
 8. 在飞书中发送 `/meeting` 消息，验证机器人自动创建会议并发布卡片。
-9. 运行自动跟进或手动触发跟进提醒，验证未完成任务提醒。
+9. 在飞书中发送 `/tasks` 查看未完成任务列表。
+10. 在飞书中发送 `/task 任务ID` 查看单个任务详情。
+11. 在飞书中发送 `/done 任务ID` 标记任务完成。
 
 ## 当前能力总结
 
@@ -358,19 +357,20 @@ npm run build
 - 已实现任务结果页和历史记录页。
 - 已实现飞书 Webhook 和自建应用机器人发送卡片。
 - 已实现飞书 `/meeting` 消息事件接入。
-- 已实现飞书事件去重，降低重复回调导致的重复发送。
+- 已实现飞书 `/tasks` 查询未完成任务。
+- 已实现飞书 `/task 任务ID` 查询单个任务详情。
+- 已实现飞书 `/done 任务ID` 标记任务完成。
+- 已实现飞书事件数据库级去重，降低重复回调导致的重复发送。
 - 已实现自动扫描未完成任务和飞书跟进提醒。
 
 ## 后续规划
 
-- 增加飞书指令 `/tasks`，直接在飞书查看当前未完成任务。
-- 增加飞书指令 `/done 任务ID`，直接在飞书标记任务完成。
-- 将事件去重从进程内存升级为数据库级幂等表。
-- 从 SQLite 升级到 PostgreSQL。
-- 引入任务队列，将 LLM 解析和飞书发送异步化。
+- 将 LLM 解析和飞书发送异步化，引入任务队列。
+- 从 SQLite 升级到 PostgreSQL，适配更真实的多人协作场景。
 - 引入 Memory，记录团队成员、项目别名和历史任务偏好。
 - 接入 MCP，让 Agent 读取更多办公系统上下文。
+- 增加更自然的飞书对话式交互，例如“帮我看一下本周有哪些高风险任务”。
 
 ## 简历描述参考
 
-ActionBridge 是一个会议执行闭环 Agent MVP，基于 FastAPI、Next.js、SQLite、DeepSeek API 和飞书机器人集成，实现会议纪要结构化解析、行动项生成、任务状态跟进、历史归档、飞书消息接入和自动提醒，帮助团队降低会议后整理与执行跟进成本。
+ActionBridge 是一个会议执行闭环 Agent MVP，基于 FastAPI、Next.js、SQLite、DeepSeek API 和飞书机器人集成，实现会议纪要结构化解析、行动项生成、任务状态跟进、历史归档、飞书消息接入、任务查询、任务完成指令和自动提醒，帮助团队降低会议后整理与执行跟进成本。

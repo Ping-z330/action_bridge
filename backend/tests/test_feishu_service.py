@@ -7,9 +7,12 @@ from app.services.feishu_service import (
     _build_follow_up_card_payload,
     _build_meeting_card_payload,
     _build_open_tasks_payload,
+    _build_project_progress_payload,
+    _build_task_detail_payload,
     _post_app_bot_card,
     extract_card_callback_action,
 )
+from app.agent.schemas import ProjectProgressSummary
 
 
 def build_meeting() -> MeetingResponse:
@@ -119,6 +122,48 @@ def test_build_open_tasks_payload_highlights_risk_and_done_command() -> None:
     assert "🚨 #12 前端修复移动端导航栏错位问题" in combined
     assert "操作：`/done 12`" in combined
     assert "#14" not in combined
+
+
+def test_build_task_detail_payload_contains_done_command() -> None:
+    payload = _build_task_detail_payload(build_task_item(12, "in_progress", "due_today", "浠婃棩鍒版湡"))
+
+    assert payload["msg_type"] == "interactive"
+    assert payload["card"]["header"]["title"]["content"] == "📋 任务详情 #12"
+    assert payload["card"]["header"]["template"] == "orange"
+
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "任务目标" in combined
+    assert "来源会议" in combined
+    assert "`/done 12`" in combined
+    assert "`/tasks`" in combined
+
+
+def test_build_project_progress_payload_contains_summary_metrics() -> None:
+    summary = ProjectProgressSummary(
+        keyword="官网改版",
+        total_count=2,
+        completed_count=1,
+        in_progress_count=0,
+        pending_count=1,
+        failed_count=0,
+        overdue_count=1,
+        due_today_count=0,
+        completion_rate=50.0,
+        conclusion="当前项目存在风险，建议优先处理有风险和逾期任务。",
+        items=[build_task_item(12, "pending", "overdue", "已逾期")],
+    )
+
+    payload = _build_project_progress_payload(summary)
+
+    assert payload["msg_type"] == "interactive"
+    assert payload["card"]["header"]["title"]["content"] == "📈 项目进度 | 官网改版"
+    assert payload["card"]["header"]["template"] == "red"
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "完成率：50.0%" in combined
+    assert "任务总数：2" in combined
+    assert "当前项目存在风险" in combined
 
 
 def test_post_app_bot_card_sends_interactive_message(monkeypatch) -> None:

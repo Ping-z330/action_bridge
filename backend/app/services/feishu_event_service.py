@@ -18,6 +18,11 @@ class FeishuTasksCommand:
     limit: int = 10
 
 
+@dataclass(frozen=True)
+class FeishuTaskCommand:
+    action_item_id: int
+
+
 def extract_challenge(payload: dict[str, Any]) -> str | None:
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
@@ -36,6 +41,24 @@ def extract_event_dedup_key(payload: dict[str, Any]) -> str | None:
         header.get("event_id"),
         message.get("message_id"),
         message.get("root_id"),
+    ]
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    return None
+
+
+def extract_reply_chat_id(payload: dict[str, Any]) -> str | None:
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    message = event.get("message") if isinstance(event.get("message"), dict) else {}
+    root_message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+
+    candidates = [
+        message.get("chat_id"),
+        root_message.get("chat_id"),
+        payload.get("chat_id"),
     ]
 
     for candidate in candidates:
@@ -106,6 +129,35 @@ def extract_tasks_command(payload: dict[str, Any]) -> FeishuTasksCommand | None:
         return None
 
     return FeishuTasksCommand()
+
+
+def extract_task_command(payload: dict[str, Any]) -> FeishuTaskCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_start = text.find("/task")
+    if command_start < 0:
+        return None
+
+    command_text = text[command_start:].strip()
+    parts = command_text.split()
+    if not parts or parts[0] != "/task":
+        return None
+
+    if len(parts) < 2:
+        raise ValueError("Invalid /task command. Expected: /task <action_item_id>.")
+
+    try:
+        action_item_id = int(parts[1])
+    except ValueError as exc:
+        raise ValueError("Invalid /task command. action_item_id must be a number.") from exc
+
+    return FeishuTaskCommand(action_item_id=action_item_id)
+
+
+def extract_message_text(payload: dict[str, Any]) -> str | None:
+    return _extract_text(payload)
 
 
 def _extract_text(payload: dict[str, Any]) -> str | None:

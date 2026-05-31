@@ -237,6 +237,17 @@ def complete_action_item(db: Session, action_item_id: int) -> ActionItem | None:
     return action_item
 
 
+def update_action_item_status(db: Session, action_item_id: int, status: str) -> ActionItemListItem | None:
+    action_item = db.query(ActionItem).filter(ActionItem.id == action_item_id).first()
+    if not action_item:
+        return None
+
+    action_item.status = status
+    db.commit()
+
+    return next((item for item in list_action_items(db) if item.id == action_item_id), None)
+
+
 def _get_action_item_due_status(action_item: ActionItem) -> str:
     if action_item.deadline_date:
         return get_due_status_from_date(action_item.deadline_date, action_item.status)
