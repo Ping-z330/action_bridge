@@ -55,6 +55,12 @@ def send_project_progress_summary(summary: ProjectProgressSummary, receive_id: s
     return "项目进度总结卡片已发送到飞书。"
 
 
+def send_help_card(receive_id: str | None = None) -> str:
+    payload = _build_help_card_payload()
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "帮助卡片已发送到飞书。"
+
+
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
     value = (
         payload.get("action", {}).get("value")
@@ -360,6 +366,66 @@ def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str
                     _divider(),
                     _markdown_block("**相关任务**"),
                     *_build_open_task_elements(summary.items[:5]),
+                ],
+            },
+        },
+    }
+
+
+def _build_help_card_payload() -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "📘 ActionBridge 使用帮助"},
+                "template": "blue",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block("**我可以帮你把会议纪要转成行动项，并持续跟进执行进度。**"),
+                    _divider(),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**会议处理**",
+                                "`/meeting 会议标题`",
+                                "下一行开始粘贴会议正文，我会生成摘要、决策和行动项。",
+                            ]
+                        )
+                    ),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**任务查询**",
+                                "`/tasks` 查看未完成任务",
+                                "`/task 12` 查看 12 号任务详情",
+                                "也可以说：`帮我看看今天到期的任务`、`官网改版相关任务`",
+                            ]
+                        )
+                    ),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**任务更新**",
+                                "`/done 12` 标记 12 号任务完成",
+                                "也可以说：`把 12 号任务标记完成`、`把 8 号任务改成进行中`、`9 号任务有风险`",
+                            ]
+                        )
+                    ),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**项目总结**",
+                                "可以说：`官网改版进度怎么样`、`官网改版有哪些风险`、`总结一下官网改版项目`",
+                            ]
+                        )
+                    ),
+                    _divider(),
+                    _markdown_block("**回复范围**\n私聊触发会回复私聊；群里触发会回复原群；后台发送和自动提醒会发到默认群。"),
                 ],
             },
         },

@@ -81,6 +81,13 @@ def test_detect_intent_for_project_progress_summary() -> None:
     assert intent.filters["keyword"] == "官网改版"
 
 
+def test_detect_intent_for_help_message() -> None:
+    intent = detect_intent("你能做什么")
+
+    assert intent is not None
+    assert intent.name == "help"
+
+
 def test_handle_agent_message_filters_by_owner() -> None:
     items = [
         _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),

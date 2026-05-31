@@ -24,6 +24,13 @@ def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -
     if not intent:
         return AgentResponse(handled=False, message="No supported agent intent found.")
 
+    if intent.name == "help":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message="已发送 ActionBridge 使用帮助。",
+        )
+
     if intent.name == "update_task_status":
         return AgentResponse(
             handled=True,
@@ -58,6 +65,9 @@ def detect_intent(message: str) -> AgentIntent | None:
     normalized = message.strip()
     if not normalized:
         return None
+
+    if _is_help_message(normalized):
+        return AgentIntent(name="help")
 
     update_intent = _detect_status_update_intent(normalized)
     if update_intent:
@@ -107,6 +117,20 @@ def detect_intent(message: str) -> AgentIntent | None:
         return AgentIntent(name="query_tasks", filters={"open_only": "true"})
 
     return None
+
+
+def _is_help_message(message: str) -> bool:
+    normalized = message.strip().lower()
+    return normalized in {
+        "help",
+        "/help",
+        "帮助",
+        "使用帮助",
+        "你能做什么",
+        "怎么使用",
+        "如何使用",
+        "功能说明",
+    }
 
 
 def _detect_progress_summary_intent(message: str) -> AgentIntent | None:

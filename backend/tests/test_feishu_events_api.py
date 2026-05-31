@@ -57,6 +57,20 @@ def _tasks_event(message_id: str = "om_tasks_1", chat_id: str = "oc_source") -> 
     }
 
 
+def _help_event(message_id: str = "om_help_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": '{"text": "/help"}',
+            }
+        },
+    }
+
+
 def _natural_language_event(text: str, message_id: str = "om_agent_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
@@ -268,6 +282,24 @@ def test_feishu_events_lists_empty_open_tasks(client, monkeypatch) -> None:
     assert sent_batches == [[]]
 
 
+def test_feishu_events_sends_help_card_for_help_command(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_receive_ids = []
+
+    def fake_send(receive_id: str | None = None) -> str:
+        sent_receive_ids.append(receive_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_help_card", fake_send)
+
+    response = client.post("/api/feishu/events", json=_help_event())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "help_sent"
+    assert sent_receive_ids == ["oc_source"]
+
+
 def test_feishu_events_sends_single_task_detail(client, monkeypatch) -> None:
     import app.api.routes as routes
 
@@ -465,6 +497,25 @@ def test_feishu_events_agent_sends_project_progress_summary(client, monkeypatch)
     assert response.json()["task_count"] == 2
     assert sent_summaries[0].keyword == "官网改版"
     assert sent_summaries[0].total_count == 2
+
+
+def test_feishu_events_agent_sends_help_card_for_natural_language(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_receive_ids = []
+
+    def fake_send(receive_id: str | None = None) -> str:
+        sent_receive_ids.append(receive_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_help_card", fake_send)
+
+    response = client.post("/api/feishu/events", json=_natural_language_event("你能做什么", message_id="om_help_nl"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "help_sent"
+    assert response.json()["intent"] == "help"
+    assert sent_receive_ids == ["oc_source"]
 
 
 def test_feishu_events_agent_ignores_unrelated_chat(client) -> None:

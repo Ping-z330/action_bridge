@@ -5,6 +5,7 @@ from app.schemas.meeting import ActionItemResponse, MeetingResponse
 from app.schemas.task_result import ActionItemListItem
 from app.services.feishu_service import (
     _build_follow_up_card_payload,
+    _build_help_card_payload,
     _build_meeting_card_payload,
     _build_open_tasks_payload,
     _build_project_progress_payload,
@@ -164,6 +165,20 @@ def test_build_project_progress_payload_contains_summary_metrics() -> None:
     assert "完成率：50.0%" in combined
     assert "任务总数：2" in combined
     assert "当前项目存在风险" in combined
+
+
+def test_build_help_card_payload_lists_commands_and_examples() -> None:
+    payload = _build_help_card_payload()
+
+    assert payload["msg_type"] == "interactive"
+    assert payload["card"]["header"]["title"]["content"] == "📘 ActionBridge 使用帮助"
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "/meeting" in combined
+    assert "/tasks" in combined
+    assert "/task 12" in combined
+    assert "/done 12" in combined
+    assert "官网改版进度怎么样" in combined
 
 
 def test_post_app_bot_card_sends_interactive_message(monkeypatch) -> None:

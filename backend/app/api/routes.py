@@ -15,6 +15,7 @@ from app.services.feishu_event_service import (
     extract_challenge,
     extract_done_command,
     extract_event_dedup_key,
+    extract_help_command,
     extract_message_text,
     extract_meeting_command,
     extract_reply_chat_id,
@@ -26,6 +27,7 @@ from app.services.feishu_service import (
     FeishuDeliveryError,
     extract_card_callback_action,
     send_action_item_completed_notice,
+    send_help_card,
     send_meeting_summary,
     send_open_tasks_summary,
     send_project_progress_summary,
@@ -158,11 +160,12 @@ def handle_feishu_events(
         done_command = extract_done_command(payload)
         task_command = extract_task_command(payload)
         tasks_command = extract_tasks_command(payload)
+        help_command = extract_help_command(payload)
         meeting_command = extract_meeting_command(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if not done_command and not task_command and not tasks_command and not meeting_command:
+    if not done_command and not task_command and not tasks_command and not help_command and not meeting_command:
         message_text = extract_message_text(payload)
         if not message_text:
             return {"status": "ignored", "message": "No supported command found."}
@@ -179,6 +182,8 @@ def handle_feishu_events(
         if task_command
         else "tasks"
         if tasks_command
+        else "help"
+        if help_command
         else "meeting"
         if meeting_command
         else agent_response.intent.name
@@ -266,12 +271,46 @@ def handle_feishu_events(
             "message": "Open tasks summary sent.",
         }
 
+    if help_command:
+        try:
+            send_help_card(receive_id=reply_chat_id)
+        except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "help_sent",
+                "message": f"Help card generated, but Feishu delivery failed: {exc}",
+            }
+
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "help_sent",
+            "message": "Help card sent.",
+        }
+
     if not meeting_command:
         message_text = extract_message_text(payload) or ""
         agent_response = handle_agent_message(message_text, list_action_items(db))
         if not agent_response.handled:
             mark_feishu_event_finished(db, dedup_key, "ignored")
             return {"status": "ignored", "message": "No supported command found."}
+
+        if agent_response.intent and agent_response.intent.name == "help":
+            try:
+                send_help_card(receive_id=reply_chat_id)
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "help_sent",
+                    "intent": agent_response.intent.name,
+                    "message": f"Help card generated, but Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "help_sent",
+                "intent": agent_response.intent.name,
+                "message": agent_response.message,
+            }
 
         if agent_response.intent and agent_response.intent.name == "update_task_status":
             action_item_id = int(agent_response.intent.filters["action_item_id"])

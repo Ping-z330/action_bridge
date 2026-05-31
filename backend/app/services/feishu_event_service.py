@@ -23,6 +23,11 @@ class FeishuTaskCommand:
     action_item_id: int
 
 
+@dataclass(frozen=True)
+class FeishuHelpCommand:
+    pass
+
+
 def extract_challenge(payload: dict[str, Any]) -> str | None:
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
@@ -154,6 +159,18 @@ def extract_task_command(payload: dict[str, Any]) -> FeishuTaskCommand | None:
         raise ValueError("Invalid /task command. action_item_id must be a number.") from exc
 
     return FeishuTaskCommand(action_item_id=action_item_id)
+
+
+def extract_help_command(payload: dict[str, Any]) -> FeishuHelpCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_text = text.strip()
+    if command_text.split()[0] == "/help":
+        return FeishuHelpCommand()
+
+    return None
 
 
 def extract_message_text(payload: dict[str, Any]) -> str | None:
