@@ -24,6 +24,12 @@ def send_follow_up_summary(meeting: MeetingResponse) -> str:
     return "跟进提醒卡片已发送到飞书。"
 
 
+def send_action_item_completed_notice(action_item_id: int, title: str, owner_name: str) -> str:
+    payload = _build_action_item_completed_payload(action_item_id, title, owner_name)
+    _deliver_card_payload(payload)
+    return "行动项完成通知已发送到飞书。"
+
+
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
     """Parse the action payload sent by Feishu interactive cards."""
     value = (
@@ -169,6 +175,30 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
                 "direction": "vertical",
                 "padding": "12px 12px 12px 12px",
                 "elements": body_elements,
+            },
+        },
+    }
+
+
+def _build_action_item_completed_payload(action_item_id: int, title: str, owner_name: str) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "✅ 行动项已完成"},
+                "template": "green",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(f"**任务 ID：{action_item_id}**"),
+                    _markdown_block(f"**任务目标：{_normalize_action_title(title, owner_name)}**"),
+                    _markdown_block(f"负责人：{owner_name}"),
+                    _markdown_block("状态已更新为：已完成"),
+                ],
             },
         },
     }

@@ -10,8 +10,19 @@ from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
 from app.schemas.task_result import ActionItemListItem
-from app.services.feishu_event_service import extract_challenge, extract_event_dedup_key, extract_meeting_command, mark_event_processing
-from app.services.feishu_service import FeishuDeliveryError, extract_card_callback_action, send_meeting_summary
+from app.services.feishu_event_service import (
+    extract_challenge,
+    extract_done_command,
+    extract_event_dedup_key,
+    extract_meeting_command,
+    mark_event_processing,
+)
+from app.services.feishu_service import (
+    FeishuDeliveryError,
+    extract_card_callback_action,
+    send_action_item_completed_notice,
+    send_meeting_summary,
+)
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
@@ -120,21 +131,42 @@ def handle_feishu_events(
         return {"challenge": challenge}
 
     try:
-        command = extract_meeting_command(payload)
+        done_command = extract_done_command(payload)
+        meeting_command = extract_meeting_command(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if not command:
-        return {"status": "ignored", "message": "No /meeting command found."}
+    if not done_command and not meeting_command:
+        return {"status": "ignored", "message": "No supported command found."}
 
     dedup_key = extract_event_dedup_key(payload)
     if not mark_event_processing(dedup_key):
         return {"status": "duplicated", "message": "Duplicated Feishu event ignored."}
 
+    if done_command:
+        action_item = complete_action_item(db, done_command.action_item_id)
+        if not action_item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+
+        try:
+            send_action_item_completed_notice(action_item.id, action_item.title, action_item.owner_name)
+        except FeishuDeliveryError as exc:
+            return {
+                "status": "completed",
+                "action_item_id": action_item.id,
+                "message": f"Action item completed, but Feishu notice delivery failed: {exc}",
+            }
+
+        return {
+            "status": "completed",
+            "action_item_id": action_item.id,
+            "message": "Action item marked as completed.",
+        }
+
     try:
         meeting = create_meeting_with_actions(
             db,
-            MeetingCreate(title=command.title, transcript=command.transcript),
+            MeetingCreate(title=meeting_command.title, transcript=meeting_command.transcript),
         )
     except OperationalError as exc:
         detail = "Database is temporarily locked. Please retry in a few seconds."

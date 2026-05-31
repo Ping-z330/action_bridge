@@ -12,6 +12,11 @@ class FeishuMeetingCommand:
     transcript: str
 
 
+@dataclass(frozen=True)
+class FeishuDoneCommand:
+    action_item_id: int
+
+
 def extract_challenge(payload: dict[str, Any]) -> str | None:
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
@@ -81,6 +86,28 @@ def extract_meeting_command(payload: dict[str, Any]) -> FeishuMeetingCommand | N
         raise ValueError("Invalid /meeting command. Expected: /meeting <title> followed by transcript.")
 
     return FeishuMeetingCommand(title=title, transcript=transcript)
+
+
+def extract_done_command(payload: dict[str, Any]) -> FeishuDoneCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_start = text.find("/done")
+    if command_start < 0:
+        return None
+
+    command_text = text[command_start:].strip()
+    parts = command_text.split()
+    if len(parts) < 2:
+        raise ValueError("Invalid /done command. Expected: /done <action_item_id>.")
+
+    try:
+        action_item_id = int(parts[1])
+    except ValueError as exc:
+        raise ValueError("Invalid /done command. action_item_id must be a number.") from exc
+
+    return FeishuDoneCommand(action_item_id=action_item_id)
 
 
 def _extract_text(payload: dict[str, Any]) -> str | None:
