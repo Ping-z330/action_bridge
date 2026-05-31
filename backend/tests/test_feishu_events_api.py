@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas.meeting import MeetingCreate, MeetingResponse
+from app.schemas.meeting import MeetingResponse
 from app.services import feishu_event_service
 
 
@@ -25,7 +25,7 @@ def _fake_meeting() -> MeetingResponse:
 
 def _meeting_event(message_id: str = "om_test_1") -> dict:
     return {
-        "header": {"event_id": "event_test_1"},
+        "header": {"event_id": message_id},
         "event": {
             "message": {
                 "message_id": message_id,
@@ -69,71 +69,53 @@ def test_feishu_events_returns_challenge(client) -> None:
     assert response.json() == {"challenge": "verify-token"}
 
 
-def test_feishu_events_ignores_non_meeting_message(client) -> None:
+def test_feishu_events_ignores_non_command_message(client) -> None:
     response = client.post(
         "/api/feishu/events",
-        json={
-            "event": {
-                "message": {
-                    "message_type": "text",
-                    "content": '{"text": "普通群聊消息"}',
-                }
-            }
-        },
+        json={"event": {"message": {"message_type": "text", "content": '{"text": "普通群聊消息"}'}}},
     )
 
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
 
 
-def test_feishu_events_creates_meeting_from_command(client, monkeypatch) -> None:
+def test_feishu_events_accepts_meeting_command_in_background(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    captured_payload: dict[str, MeetingCreate] = {}
-    sent_meetings: list[MeetingResponse] = []
+    accepted_commands: list[tuple[str, str]] = []
 
-    def fake_create(_db, payload: MeetingCreate) -> MeetingResponse:
-        captured_payload["payload"] = payload
-        return _fake_meeting()
+    def fake_process(title: str, transcript: str) -> None:
+        accepted_commands.append((title, transcript))
 
-    def fake_send(meeting: MeetingResponse) -> str:
-        sent_meetings.append(meeting)
-        return "sent"
-
-    monkeypatch.setattr(routes, "create_meeting_with_actions", fake_create)
-    monkeypatch.setattr(routes, "send_meeting_summary", fake_send)
+    monkeypatch.setattr(routes, "process_feishu_meeting_command", fake_process)
 
     response = client.post("/api/feishu/events", json=_meeting_event())
 
     assert response.status_code == 200
-    assert response.json()["status"] == "created"
-    assert response.json()["meeting_id"] == 123
-    assert captured_payload["payload"].title == "每周产品同步会"
-    assert "讨论官网改版上线风险" in captured_payload["payload"].transcript
-    assert sent_meetings[0].id == 123
+    assert response.json()["status"] == "accepted"
+    assert accepted_commands[0][0] == "每周产品同步会"
+    assert "讨论官网改版上线风险" in accepted_commands[0][1]
 
 
-def test_feishu_events_ignores_duplicate_message_id(client, monkeypatch) -> None:
+def test_feishu_events_deduplicates_meeting_command(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    create_count = 0
+    process_count = 0
 
-    def fake_create(_db, _payload: MeetingCreate) -> MeetingResponse:
-        nonlocal create_count
-        create_count += 1
-        return _fake_meeting()
+    def fake_process(_title: str, _transcript: str) -> None:
+        nonlocal process_count
+        process_count += 1
 
-    monkeypatch.setattr(routes, "create_meeting_with_actions", fake_create)
-    monkeypatch.setattr(routes, "send_meeting_summary", lambda meeting: "sent")
+    monkeypatch.setattr(routes, "process_feishu_meeting_command", fake_process)
 
     first_response = client.post("/api/feishu/events", json=_meeting_event(message_id="om_duplicate"))
     second_response = client.post("/api/feishu/events", json=_meeting_event(message_id="om_duplicate"))
 
     assert first_response.status_code == 200
-    assert first_response.json()["status"] == "created"
+    assert first_response.json()["status"] == "accepted"
     assert second_response.status_code == 200
     assert second_response.json()["status"] == "duplicated"
-    assert create_count == 1
+    assert process_count == 1
 
 
 def test_feishu_events_marks_action_item_done(client, monkeypatch) -> None:

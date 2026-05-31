@@ -1,10 +1,10 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.schemas.action_item import ActionItemUpdate, FeishuCardCallbackResponse
 from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
@@ -38,6 +38,18 @@ from app.services.meeting_service import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+def process_feishu_meeting_command(title: str, transcript: str) -> None:
+    db = SessionLocal()
+    try:
+        meeting = create_meeting_with_actions(
+            db,
+            MeetingCreate(title=title, transcript=transcript),
+        )
+        send_meeting_summary(meeting)
+    finally:
+        db.close()
 
 
 @router.post("/meetings", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
@@ -126,6 +138,7 @@ def handle_feishu_card_callback(
 @router.post("/feishu/events")
 def handle_feishu_events(
     payload: dict[str, Any],
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     challenge = extract_challenge(payload)
@@ -188,26 +201,12 @@ def handle_feishu_events(
             "message": "Open tasks summary sent.",
         }
 
-    try:
-        meeting = create_meeting_with_actions(
-            db,
-            MeetingCreate(title=meeting_command.title, transcript=meeting_command.transcript),
-        )
-    except OperationalError as exc:
-        detail = "Database is temporarily locked. Please retry in a few seconds."
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail) from exc
-
-    try:
-        send_meeting_summary(meeting)
-    except FeishuDeliveryError as exc:
-        return {
-            "status": "created",
-            "meeting_id": meeting.id,
-            "message": f"Meeting created, but Feishu card delivery failed: {exc}",
-        }
-
+    background_tasks.add_task(
+        process_feishu_meeting_command,
+        meeting_command.title,
+        meeting_command.transcript,
+    )
     return {
-        "status": "created",
-        "meeting_id": meeting.id,
-        "message": "Meeting created and Feishu summary card sent.",
+        "status": "accepted",
+        "message": "Meeting command accepted and will be processed in background.",
     }
