@@ -42,6 +42,8 @@ from app.services.feishu_service import (
     send_task_create_confirmation,
     send_task_deadline_update_confirmation,
     send_task_detail_summary,
+    send_task_not_found_notice,
+    send_task_owner_update_confirmation,
 )
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
@@ -55,6 +57,7 @@ from app.services.meeting_service import (
     send_meeting_to_feishu,
     update_action_item,
     update_action_item_deadline,
+    update_action_item_owner,
     update_action_item_status,
 )
 from app.services.memory_service import (
@@ -70,9 +73,34 @@ from app.services.pending_agent_action_service import (
     resolve_pending_action,
     save_pending_create_task,
     save_pending_update_task_deadline,
+    save_pending_update_task_owner,
 )
 
 router = APIRouter(prefix="/api")
+
+
+def _send_task_not_found_response(
+    action_item_id: int,
+    dedup_key: str | None,
+    receive_id: str | None,
+    db: Session,
+) -> dict[str, Any]:
+    try:
+        send_task_not_found_notice(action_item_id, receive_id=receive_id)
+    except FeishuDeliveryError as exc:
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "task_not_found",
+            "action_item_id": action_item_id,
+            "message": f"Action item not found, but Feishu notice delivery failed: {exc}",
+        }
+
+    mark_feishu_event_finished(db, dedup_key, "finished")
+    return {
+        "status": "task_not_found",
+        "action_item_id": action_item_id,
+        "message": "Action item not found notice sent.",
+    }
 
 
 def process_feishu_meeting_command(title: str, transcript: str, receive_id: str | None = None) -> None:
@@ -252,8 +280,7 @@ def handle_feishu_events(
     if done_command:
         action_item = complete_action_item(db, done_command.action_item_id)
         if not action_item:
-            mark_feishu_event_finished(db, dedup_key, "failed")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+            return _send_task_not_found_response(done_command.action_item_id, dedup_key, reply_chat_id, db)
 
         try:
             send_action_item_completed_notice(
@@ -283,8 +310,7 @@ def handle_feishu_events(
             None,
         )
         if not action_item:
-            mark_feishu_event_finished(db, dedup_key, "failed")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+            return _send_task_not_found_response(task_command.action_item_id, dedup_key, reply_chat_id, db)
 
         try:
             send_task_detail_summary(action_item, receive_id=reply_chat_id)
@@ -464,10 +490,30 @@ def handle_feishu_events(
                 )
                 if not action_item:
                     resolve_pending_action(db, pending, "failed")
-                    mark_feishu_event_finished(db, dedup_key, "failed")
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+                    return _send_task_not_found_response(
+                        int(payload_data["action_item_id"]),
+                        dedup_key,
+                        reply_chat_id,
+                        db,
+                    )
                 confirmed_intent = "confirm_update_task_deadline"
                 success_message = "Task deadline updated after confirmation."
+            elif pending.action_type == "update_task_owner":
+                action_item = update_action_item_owner(
+                    db,
+                    action_item_id=int(payload_data["action_item_id"]),
+                    owner_name=payload_data["new_owner_name"],
+                )
+                if not action_item:
+                    resolve_pending_action(db, pending, "failed")
+                    return _send_task_not_found_response(
+                        int(payload_data["action_item_id"]),
+                        dedup_key,
+                        reply_chat_id,
+                        db,
+                    )
+                confirmed_intent = "confirm_update_task_owner"
+                success_message = "Task owner updated after confirmation."
             else:
                 resolve_pending_action(db, pending, "failed")
                 mark_feishu_event_finished(db, dedup_key, "failed")
@@ -570,8 +616,7 @@ def handle_feishu_events(
             new_deadline = agent_response.intent.filters["deadline"]
             action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
             if not action_item:
-                mark_feishu_event_finished(db, dedup_key, "failed")
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+                return _send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
 
             save_pending_update_task_deadline(
                 db,
@@ -606,13 +651,52 @@ def handle_feishu_events(
                 "message": "Task deadline update confirmation requested.",
             }
 
+        if agent_response.intent and agent_response.intent.name == "update_task_owner":
+            action_item_id = int(agent_response.intent.filters["action_item_id"])
+            new_owner_name = agent_response.intent.filters["owner_name"]
+            action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
+            if not action_item:
+                return _send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
+
+            save_pending_update_task_owner(
+                db,
+                chat_id=pending_chat_id,
+                action_item_id=action_item_id,
+                title=action_item.title,
+                old_owner_name=action_item.owner_name,
+                new_owner_name=new_owner_name,
+            )
+            try:
+                send_task_owner_update_confirmation(
+                    action_item_id=action_item_id,
+                    title=action_item.title,
+                    old_owner_name=action_item.owner_name,
+                    new_owner_name=new_owner_name,
+                    receive_id=reply_chat_id,
+                )
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "task_owner_update_pending",
+                    "intent": agent_response.intent.name,
+                    "action_item_id": action_item_id,
+                    "message": f"Task owner update confirmation saved, but Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "task_owner_update_pending",
+                "intent": agent_response.intent.name,
+                "action_item_id": action_item_id,
+                "message": "Task owner update confirmation requested.",
+            }
+
         if agent_response.intent and agent_response.intent.name == "update_task_status":
             action_item_id = int(agent_response.intent.filters["action_item_id"])
             target_status = agent_response.intent.filters["status"]
             action_item = update_action_item_status(db, action_item_id, target_status)
             if not action_item:
-                mark_feishu_event_finished(db, dedup_key, "failed")
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+                return _send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
 
             try:
                 send_task_detail_summary(action_item, receive_id=reply_chat_id)

@@ -261,15 +261,24 @@ def test_feishu_events_deduplicates_done_command(client, monkeypatch) -> None:
     assert sent_count == 1
 
 
-def test_feishu_events_done_missing_action_item_returns_404(client, monkeypatch) -> None:
+def test_feishu_events_done_missing_action_item_sends_notice(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    monkeypatch.setattr(routes, "send_action_item_completed_notice", lambda *_args, **_kwargs: "sent")
+    sent_ids = []
+
+    def fake_send(action_item_id: int, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_ids.append(action_item_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_not_found_notice", fake_send)
 
     response = client.post("/api/feishu/events", json=_done_event(9999))
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Action item not found"
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_not_found"
+    assert response.json()["action_item_id"] == 9999
+    assert sent_ids == [9999]
 
 
 def test_feishu_events_lists_open_tasks(client, monkeypatch) -> None:
@@ -447,15 +456,24 @@ def test_feishu_events_deduplicates_single_task_command(client, monkeypatch) -> 
     assert sent_count == 1
 
 
-def test_feishu_events_task_missing_action_item_returns_404(client, monkeypatch) -> None:
+def test_feishu_events_task_missing_action_item_sends_notice(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    monkeypatch.setattr(routes, "send_task_detail_summary", lambda *_args, **_kwargs: "sent")
+    sent_ids = []
+
+    def fake_send(action_item_id: int, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_ids.append(action_item_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_not_found_notice", fake_send)
 
     response = client.post("/api/feishu/events", json=_task_event(9999))
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Action item not found"
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_not_found"
+    assert response.json()["action_item_id"] == 9999
+    assert sent_ids == [9999]
 
 
 def test_feishu_events_rejects_invalid_task_command(client) -> None:
@@ -723,6 +741,141 @@ def test_feishu_events_agent_updates_deadline_after_confirmation(client, monkeyp
     assert updated["deadline_time"] == "18:00"
 
 
+def test_feishu_events_agent_asks_confirmation_before_updating_owner(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Owner update confirmation test",
+            "transcript": "Action: 前端同学修复移动端问题。",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    original_owner = meeting["action_items"][0]["owner_name"]
+    sent_confirmations = []
+
+    def fake_send(
+        action_item_id: int,
+        title: str,
+        old_owner_name: str,
+        new_owner_name: str,
+        receive_id: str | None = None,
+    ) -> str:
+        assert receive_id == "oc_source"
+        sent_confirmations.append((action_item_id, title, old_owner_name, new_owner_name))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_owner_update_confirmation", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"把 {action_item_id} 号任务负责人改成测试同学", message_id="om_update_owner"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_owner_update_pending"
+    assert response.json()["intent"] == "update_task_owner"
+    assert sent_confirmations[0][0] == action_item_id
+    assert sent_confirmations[0][2] == original_owner
+    assert sent_confirmations[0][3] == "测试同学"
+
+    unchanged = client.get(f"/api/meetings/{meeting['id']}").json()["action_items"][0]
+    assert unchanged["owner_name"] == original_owner
+
+
+def test_feishu_events_agent_updates_owner_after_confirmation(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Owner update execution test",
+            "transcript": "Action: 前端同学修复移动端问题。",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    sent_items = []
+
+    monkeypatch.setattr(routes, "send_task_owner_update_confirmation", lambda *_args, **_kwargs: "sent")
+
+    def fake_send(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    pending_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"把 {action_item_id} 号任务负责人改成测试同学", message_id="om_update_owner"),
+    )
+    confirm_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("确认", message_id="om_confirm_update_owner"),
+    )
+
+    assert pending_response.status_code == 200
+    assert pending_response.json()["status"] == "task_owner_update_pending"
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["status"] == "agent_confirmed"
+    assert confirm_response.json()["intent"] == "confirm_update_task_owner"
+    assert confirm_response.json()["action_item_id"] == action_item_id
+    assert sent_items[0].id == action_item_id
+    assert sent_items[0].owner_name == "测试同学"
+
+    updated = client.get(f"/api/meetings/{meeting['id']}").json()["action_items"][0]
+    assert updated["owner_name"] == "测试同学"
+
+
+def test_feishu_events_agent_update_deadline_missing_action_item_sends_notice(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_ids = []
+
+    def fake_send(action_item_id: int, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_ids.append(action_item_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_not_found_notice", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("把 9999 号任务延期到周五", message_id="om_missing_deadline_update"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_not_found"
+    assert response.json()["action_item_id"] == 9999
+    assert sent_ids == [9999]
+
+
+def test_feishu_events_agent_update_owner_missing_action_item_sends_notice(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_ids = []
+
+    def fake_send(action_item_id: int, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_ids.append(action_item_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_not_found_notice", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("把 9999 号任务负责人改成测试同学", message_id="om_missing_owner_update"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_not_found"
+    assert response.json()["action_item_id"] == 9999
+    assert sent_ids == [9999]
+
+
 def test_feishu_events_agent_create_task_missing_info_prompts_user(client, monkeypatch) -> None:
     import app.api.routes as routes
 
@@ -748,15 +901,24 @@ def test_feishu_events_agent_create_task_missing_info_prompts_user(client, monke
     assert client.get("/api/action-items").json() == []
 
 
-def test_feishu_events_agent_update_missing_action_item_returns_404(client, monkeypatch) -> None:
+def test_feishu_events_agent_update_missing_action_item_sends_notice(client, monkeypatch) -> None:
     import app.api.routes as routes
 
-    monkeypatch.setattr(routes, "send_task_detail_summary", lambda *_args, **_kwargs: "sent")
+    sent_ids = []
+
+    def fake_send(action_item_id: int, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_ids.append(action_item_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_not_found_notice", fake_send)
 
     response = client.post("/api/feishu/events", json=_natural_language_event("把 9999 号任务标记完成"))
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Action item not found"
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_not_found"
+    assert response.json()["action_item_id"] == 9999
+    assert sent_ids == [9999]
 
 
 def test_feishu_events_agent_sends_project_progress_summary(client, monkeypatch) -> None:

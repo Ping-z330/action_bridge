@@ -320,6 +320,17 @@ def update_action_item_deadline(db: Session, action_item_id: int, deadline: str)
     return next((item for item in list_action_items(db) if item.id == action_item_id), None)
 
 
+def update_action_item_owner(db: Session, action_item_id: int, owner_name: str) -> ActionItemListItem | None:
+    action_item = db.query(ActionItem).filter(ActionItem.id == action_item_id).first()
+    if not action_item:
+        return None
+
+    action_item.owner_name = owner_name
+    db.commit()
+
+    return next((item for item in list_action_items(db) if item.id == action_item_id), None)
+
+
 def _get_action_item_due_status(action_item: ActionItem) -> str:
     if action_item.deadline_date:
         return get_due_status_from_date(action_item.deadline_date, action_item.status)

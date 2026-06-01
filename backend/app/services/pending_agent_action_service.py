@@ -79,6 +79,36 @@ def save_pending_update_task_deadline(
     return pending
 
 
+def save_pending_update_task_owner(
+    db: Session,
+    chat_id: str,
+    action_item_id: int,
+    title: str,
+    old_owner_name: str,
+    new_owner_name: str,
+) -> PendingAgentAction:
+    cancel_pending_actions(db, chat_id)
+    pending = PendingAgentAction(
+        chat_id=chat_id,
+        action_type="update_task_owner",
+        payload_json=json.dumps(
+            {
+                "action_item_id": action_item_id,
+                "title": title,
+                "old_owner_name": old_owner_name,
+                "new_owner_name": new_owner_name,
+            },
+            ensure_ascii=False,
+        ),
+        status="pending",
+        expires_at=utc_now() + timedelta(minutes=PENDING_ACTION_TTL_MINUTES),
+    )
+    db.add(pending)
+    db.commit()
+    db.refresh(pending)
+    return pending
+
+
 def get_active_pending_action(db: Session, chat_id: str) -> PendingAgentAction | None:
     pending = (
         db.query(PendingAgentAction)

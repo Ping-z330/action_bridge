@@ -70,6 +70,13 @@ def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -
             message=f"准备修改任务 {intent.filters['action_item_id']} 的截止时间。",
         )
 
+    if intent.name == "update_task_owner":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"准备修改任务 {intent.filters['action_item_id']} 的负责人。",
+        )
+
     if intent.name == "update_task_status":
         return AgentResponse(
             handled=True,
@@ -115,6 +122,10 @@ def detect_intent(message: str) -> AgentIntent | None:
     deadline_update_intent = _detect_deadline_update_intent(normalized)
     if deadline_update_intent:
         return deadline_update_intent
+
+    owner_update_intent = _detect_owner_update_intent(normalized)
+    if owner_update_intent:
+        return owner_update_intent
 
     update_intent = _detect_status_update_intent(normalized)
     if update_intent:
@@ -206,6 +217,31 @@ def _detect_deadline_update_intent(message: str) -> AgentIntent | None:
                     filters={
                         "action_item_id": str(action_item_id),
                         "deadline": deadline,
+                    },
+                )
+
+    return None
+
+
+def _detect_owner_update_intent(message: str) -> AgentIntent | None:
+    action_item_id = _extract_action_item_id(message)
+    if action_item_id is None:
+        return None
+
+    patterns = (
+        r"(?:负责人)?(?:改成|改为|换成|转给|交给|分配给)\s*(?P<owner>.{1,20}?)(?:负责)?$",
+        r"负责人\s*(?:改成|改为|换成|设置为)\s*(?P<owner>.{1,20})$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            owner_name = _clean_task_field(match.group("owner"))
+            if owner_name and not _is_filter_phrase(owner_name):
+                return AgentIntent(
+                    name="update_task_owner",
+                    filters={
+                        "action_item_id": str(action_item_id),
+                        "owner_name": owner_name,
                     },
                 )
 

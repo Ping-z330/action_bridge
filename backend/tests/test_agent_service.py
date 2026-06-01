@@ -116,6 +116,15 @@ def test_detect_intent_for_update_task_deadline() -> None:
     assert intent.filters["deadline"] == "周五"
 
 
+def test_detect_intent_for_update_task_owner() -> None:
+    intent = detect_intent("把 12 号任务负责人改成测试同学")
+
+    assert intent is not None
+    assert intent.name == "update_task_owner"
+    assert intent.filters["action_item_id"] == "12"
+    assert intent.filters["owner_name"] == "测试同学"
+
+
 def test_handle_agent_message_filters_by_owner() -> None:
     items = [
         _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),

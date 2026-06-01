@@ -50,6 +50,12 @@ def send_task_detail_summary(item: ActionItemListItem, receive_id: str | None = 
     return "任务详情卡片已发送到飞书。"
 
 
+def send_task_not_found_notice(action_item_id: int, receive_id: str | None = None) -> str:
+    payload = _build_task_not_found_payload(action_item_id)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务不存在提示卡片已发送到飞书。"
+
+
 def send_task_create_clarification(message: str, receive_id: str | None = None) -> str:
     payload = _build_task_create_clarification_payload(message)
     _deliver_card_payload(payload, receive_id=receive_id)
@@ -82,6 +88,23 @@ def send_task_deadline_update_confirmation(
     )
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务截止时间修改确认卡片已发送到飞书。"
+
+
+def send_task_owner_update_confirmation(
+    action_item_id: int,
+    title: str,
+    old_owner_name: str,
+    new_owner_name: str,
+    receive_id: str | None = None,
+) -> str:
+    payload = _build_task_owner_update_confirmation_payload(
+        action_item_id,
+        title,
+        old_owner_name,
+        new_owner_name,
+    )
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务负责人修改确认卡片已发送到飞书。"
 
 
 def send_pending_action_notice(title: str, message: str, receive_id: str | None = None) -> str:
@@ -382,6 +405,37 @@ def _build_task_detail_payload(item: ActionItemListItem) -> dict[str, Any]:
     }
 
 
+def _build_task_not_found_payload(action_item_id: int) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"🔎 没有找到任务 #{action_item_id}"},
+                "template": "orange",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block("没有找到这个任务，可能是任务 ID 输入错误，或者任务已被删除。"),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**你可以这样检查：**",
+                                "`/tasks` 查看当前未完成任务",
+                                "`/task 任务ID` 查看任务详情",
+                                "确认任务 ID 后再尝试更新。",
+                            ]
+                        )
+                    ),
+                ],
+            },
+        },
+    }
+
+
 def _build_task_create_clarification_payload(message: str) -> dict[str, Any]:
     return {
         "msg_type": "interactive",
@@ -459,6 +513,36 @@ def _build_task_deadline_update_confirmation_payload(
                     _markdown_block(f"**任务目标**\n{title}"),
                     _markdown_block(f"**原截止时间**\n{old_deadline or '待确认'}"),
                     _markdown_block(f"**新截止时间**\n{new_deadline}"),
+                    _divider(),
+                    _markdown_block("回复 `确认` 执行修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
+                ],
+            },
+        },
+    }
+
+
+def _build_task_owner_update_confirmation_payload(
+    action_item_id: int,
+    title: str,
+    old_owner_name: str,
+    new_owner_name: str,
+) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"👤 请确认修改任务 #{action_item_id}"},
+                "template": "blue",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(f"**任务目标**\n{title}"),
+                    _markdown_block(f"**原负责人**\n{old_owner_name or '待确认'}"),
+                    _markdown_block(f"**新负责人**\n{new_owner_name}"),
                     _divider(),
                     _markdown_block("回复 `确认` 执行修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
                 ],
@@ -577,6 +661,7 @@ def _build_help_card_payload() -> dict[str, Any]:
                                 "`/done 12` 标记 12 号任务完成",
                                 "也可以说：`把 12 号任务标记完成`、`把 8 号任务改成进行中`、`9 号任务有风险`",
                                 "修改截止时间：`把 12 号任务延期到周五`，我会先让你确认。",
+                                "修改负责人：`把 12 号任务负责人改成测试同学`，我也会先让你确认。",
                             ]
                         )
                     ),
