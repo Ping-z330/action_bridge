@@ -68,12 +68,14 @@ from app.services.memory_service import (
 )
 from app.services.pending_agent_action_service import (
     detect_confirmation_message,
+    detect_pending_revision,
     get_active_pending_action,
     load_pending_payload,
     resolve_pending_action,
     save_pending_create_task,
     save_pending_update_task_deadline,
     save_pending_update_task_owner,
+    update_pending_payload,
 )
 
 router = APIRouter(prefix="/api")
@@ -237,9 +239,19 @@ def handle_feishu_events(
         )
     )
     confirmation_action = None if has_fixed_command else detect_confirmation_message(message_text)
+    active_pending_action = (
+        get_active_pending_action(db, pending_chat_id)
+        if not has_fixed_command and not confirmation_action
+        else None
+    )
+    pending_revision = (
+        detect_pending_revision(message_text, active_pending_action)
+        if active_pending_action
+        else None
+    )
     agent_response = None
 
-    if not has_fixed_command and not confirmation_action:
+    if not has_fixed_command and not confirmation_action and not pending_revision:
         if not message_text:
             return {"status": "ignored", "message": "No supported command found."}
 
@@ -537,6 +549,50 @@ def handle_feishu_events(
                 "intent": confirmed_intent,
                 "action_item_id": action_item.id,
                 "message": success_message,
+            }
+
+        if active_pending_action and pending_revision:
+            updated_payload = update_pending_payload(db, active_pending_action, pending_revision)
+            try:
+                if active_pending_action.action_type == "create_task":
+                    send_task_create_confirmation(
+                        title=updated_payload["title"],
+                        owner_name=updated_payload["owner_name"],
+                        deadline=updated_payload["deadline"],
+                        receive_id=reply_chat_id,
+                    )
+                elif active_pending_action.action_type == "update_task_deadline":
+                    send_task_deadline_update_confirmation(
+                        action_item_id=int(updated_payload["action_item_id"]),
+                        title=updated_payload["title"],
+                        old_deadline=updated_payload["old_deadline"],
+                        new_deadline=updated_payload["new_deadline"],
+                        receive_id=reply_chat_id,
+                    )
+                elif active_pending_action.action_type == "update_task_owner":
+                    send_task_owner_update_confirmation(
+                        action_item_id=int(updated_payload["action_item_id"]),
+                        title=updated_payload["title"],
+                        old_owner_name=updated_payload["old_owner_name"],
+                        new_owner_name=updated_payload["new_owner_name"],
+                        receive_id=reply_chat_id,
+                    )
+                else:
+                    mark_feishu_event_finished(db, dedup_key, "failed")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported pending action")
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "pending_revised",
+                    "action_type": active_pending_action.action_type,
+                    "message": f"Pending action revised, but Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "pending_revised",
+                "action_type": active_pending_action.action_type,
+                "message": "Pending action revised.",
             }
 
         normalized_message = normalize_message_with_memory(db, message_text)

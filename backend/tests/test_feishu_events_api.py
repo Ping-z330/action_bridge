@@ -741,6 +741,60 @@ def test_feishu_events_agent_updates_deadline_after_confirmation(client, monkeyp
     assert updated["deadline_time"] == "18:00"
 
 
+def test_feishu_events_agent_revises_pending_deadline_before_confirmation(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Deadline revision test",
+            "transcript": "Action: Frontend fixes mobile navigation issue.",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    sent_confirmations = []
+    sent_items = []
+
+    def fake_confirmation(
+        action_item_id: int,
+        title: str,
+        old_deadline: str,
+        new_deadline: str,
+        receive_id: str | None = None,
+    ) -> str:
+        assert receive_id == "oc_source"
+        sent_confirmations.append(new_deadline)
+        return "sent"
+
+    def fake_detail(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_deadline_update_confirmation", fake_confirmation)
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_detail)
+
+    client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"把 {action_item_id} 号任务延期到周五", message_id="om_update_deadline"),
+    )
+    revise_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("改成下周一", message_id="om_revise_deadline"),
+    )
+    confirm_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("确认", message_id="om_confirm_revised_deadline"),
+    )
+
+    assert revise_response.status_code == 200
+    assert revise_response.json()["status"] == "pending_revised"
+    assert sent_confirmations == ["周五", "下周一"]
+    assert confirm_response.status_code == 200
+    assert sent_items[0].deadline_date
+
+
 def test_feishu_events_agent_asks_confirmation_before_updating_owner(client, monkeypatch) -> None:
     import app.api.routes as routes
 
@@ -828,6 +882,60 @@ def test_feishu_events_agent_updates_owner_after_confirmation(client, monkeypatc
 
     updated = client.get(f"/api/meetings/{meeting['id']}").json()["action_items"][0]
     assert updated["owner_name"] == "测试同学"
+
+
+def test_feishu_events_agent_revises_pending_owner_before_confirmation(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Owner revision test",
+            "transcript": "Action: 前端同学修复移动端问题。",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    sent_confirmations = []
+    sent_items = []
+
+    def fake_confirmation(
+        action_item_id: int,
+        title: str,
+        old_owner_name: str,
+        new_owner_name: str,
+        receive_id: str | None = None,
+    ) -> str:
+        assert receive_id == "oc_source"
+        sent_confirmations.append(new_owner_name)
+        return "sent"
+
+    def fake_detail(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_owner_update_confirmation", fake_confirmation)
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_detail)
+
+    client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"把 {action_item_id} 号任务负责人改成测试同学", message_id="om_update_owner"),
+    )
+    revise_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("换成产品经理", message_id="om_revise_owner"),
+    )
+    confirm_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("确认", message_id="om_confirm_revised_owner"),
+    )
+
+    assert revise_response.status_code == 200
+    assert revise_response.json()["status"] == "pending_revised"
+    assert sent_confirmations == ["测试同学", "产品经理"]
+    assert confirm_response.status_code == 200
+    assert sent_items[0].owner_name == "产品经理"
 
 
 def test_feishu_events_agent_update_deadline_missing_action_item_sends_notice(client, monkeypatch) -> None:
