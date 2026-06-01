@@ -15,9 +15,12 @@ from app.services.feishu_event_service import (
     extract_challenge,
     extract_done_command,
     extract_event_dedup_key,
+    extract_forget_command,
     extract_help_command,
     extract_message_text,
+    extract_memory_command,
     extract_meeting_command,
+    extract_remember_command,
     extract_reply_chat_id,
     extract_task_command,
     extract_tasks_command,
@@ -29,6 +32,9 @@ from app.services.feishu_service import (
     send_action_item_completed_notice,
     send_help_card,
     send_meeting_summary,
+    send_memory_deleted_notice,
+    send_memory_list_summary,
+    send_memory_saved_notice,
     send_open_tasks_summary,
     send_project_progress_summary,
     send_task_detail_summary,
@@ -44,6 +50,12 @@ from app.services.meeting_service import (
     send_meeting_to_feishu,
     update_action_item,
     update_action_item_status,
+)
+from app.services.memory_service import (
+    forget_alias,
+    list_memory_aliases,
+    normalize_message_with_memory,
+    remember_alias,
 )
 
 router = APIRouter(prefix="/api")
@@ -161,16 +173,29 @@ def handle_feishu_events(
         task_command = extract_task_command(payload)
         tasks_command = extract_tasks_command(payload)
         help_command = extract_help_command(payload)
+        remember_command = extract_remember_command(payload)
+        memory_command = extract_memory_command(payload)
+        forget_command = extract_forget_command(payload)
         meeting_command = extract_meeting_command(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if not done_command and not task_command and not tasks_command and not help_command and not meeting_command:
+    if (
+        not done_command
+        and not task_command
+        and not tasks_command
+        and not help_command
+        and not remember_command
+        and not memory_command
+        and not forget_command
+        and not meeting_command
+    ):
         message_text = extract_message_text(payload)
         if not message_text:
             return {"status": "ignored", "message": "No supported command found."}
 
-        agent_response = handle_agent_message(message_text, list_action_items(db))
+        normalized_message = normalize_message_with_memory(db, message_text)
+        agent_response = handle_agent_message(normalized_message, list_action_items(db))
         if not agent_response.handled:
             return {"status": "ignored", "message": "No supported command found."}
 
@@ -184,6 +209,12 @@ def handle_feishu_events(
         if tasks_command
         else "help"
         if help_command
+        else "remember"
+        if remember_command
+        else "memory"
+        if memory_command
+        else "forget"
+        if forget_command
         else "meeting"
         if meeting_command
         else agent_response.intent.name
@@ -287,9 +318,78 @@ def handle_feishu_events(
             "message": "Help card sent.",
         }
 
+    if remember_command:
+        item = remember_alias(
+            db,
+            remember_command.alias,
+            remember_command.target,
+            remember_command.memory_type,
+        )
+        try:
+            send_memory_saved_notice(item, receive_id=reply_chat_id)
+        except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "memory_saved",
+                "alias": item.alias,
+                "target": item.target,
+                "message": f"Memory saved, but Feishu delivery failed: {exc}",
+            }
+
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "memory_saved",
+            "alias": item.alias,
+            "target": item.target,
+            "message": "Memory alias saved.",
+        }
+
+    if memory_command:
+        items = list_memory_aliases(db)
+        try:
+            send_memory_list_summary(items, receive_id=reply_chat_id)
+        except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "memory_listed",
+                "memory_count": len(items),
+                "message": f"Memory listed, but Feishu delivery failed: {exc}",
+            }
+
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "memory_listed",
+            "memory_count": len(items),
+            "message": "Memory aliases listed.",
+        }
+
+    if forget_command:
+        item = forget_alias(db, forget_command.alias)
+        if not item:
+            mark_feishu_event_finished(db, dedup_key, "failed")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory alias not found")
+
+        try:
+            send_memory_deleted_notice(item, receive_id=reply_chat_id)
+        except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "memory_deleted",
+                "alias": item.alias,
+                "message": f"Memory deleted, but Feishu delivery failed: {exc}",
+            }
+
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "memory_deleted",
+            "alias": item.alias,
+            "message": "Memory alias deleted.",
+        }
+
     if not meeting_command:
         message_text = extract_message_text(payload) or ""
-        agent_response = handle_agent_message(message_text, list_action_items(db))
+        normalized_message = normalize_message_with_memory(db, message_text)
+        agent_response = handle_agent_message(normalized_message, list_action_items(db))
         if not agent_response.handled:
             mark_feishu_event_finished(db, dedup_key, "ignored")
             return {"status": "ignored", "message": "No supported command found."}

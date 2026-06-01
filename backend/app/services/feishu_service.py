@@ -6,6 +6,7 @@ import httpx
 from app.agent.schemas import ProjectProgressSummary
 from app.core.config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DEFAULT_CHAT_ID, FEISHU_WEBHOOK_URL
 from app.schemas.meeting import ActionItemResponse, MeetingResponse
+from app.schemas.memory import MemoryAliasItem
 from app.schemas.task_result import ActionItemListItem
 from app.services.due_status_service import get_due_status, get_due_status_label
 
@@ -59,6 +60,24 @@ def send_help_card(receive_id: str | None = None) -> str:
     payload = _build_help_card_payload()
     _deliver_card_payload(payload, receive_id=receive_id)
     return "帮助卡片已发送到飞书。"
+
+
+def send_memory_saved_notice(item: MemoryAliasItem, receive_id: str | None = None) -> str:
+    payload = _build_memory_saved_payload(item)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "Memory saved notice sent to Feishu."
+
+
+def send_memory_deleted_notice(item: MemoryAliasItem, receive_id: str | None = None) -> str:
+    payload = _build_memory_deleted_payload(item)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "Memory deleted notice sent to Feishu."
+
+
+def send_memory_list_summary(items: Iterable[MemoryAliasItem], receive_id: str | None = None) -> str:
+    payload = _build_memory_list_payload(items)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "Memory list sent to Feishu."
 
 
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
@@ -427,6 +446,68 @@ def _build_help_card_payload() -> dict[str, Any]:
                     _divider(),
                     _markdown_block("**回复范围**\n私聊触发会回复私聊；群里触发会回复原群；后台发送和自动提醒会发到默认群。"),
                 ],
+            },
+        },
+    }
+
+
+def _build_memory_saved_payload(item: MemoryAliasItem) -> dict[str, Any]:
+    return _build_simple_memory_payload(
+        title="🧠 已记住",
+        template="green",
+        lines=[
+            f"类型：{item.memory_type}",
+            f"别名：{item.alias}",
+            f"标准说法：{item.target}",
+            "之后我会先用这条记忆归一化你的自然语言查询。",
+        ],
+    )
+
+
+def _build_memory_deleted_payload(item: MemoryAliasItem) -> dict[str, Any]:
+    return _build_simple_memory_payload(
+        title="🧹 已忘记",
+        template="orange",
+        lines=[
+            f"别名：{item.alias}",
+            f"原标准说法：{item.target}",
+        ],
+    )
+
+
+def _build_memory_list_payload(items: Iterable[MemoryAliasItem]) -> dict[str, Any]:
+    materialized = list(items)
+    if materialized:
+        lines = [
+            f"- `{item.alias}` = `{item.target}` ({item.memory_type})"
+            for item in materialized[:20]
+        ]
+        if len(materialized) > 20:
+            lines.append(f"- 还有 {len(materialized) - 20} 条未展示")
+    else:
+        lines = ["当前还没有记忆。可以发送：`/remember 官网 = 官网改版`"]
+
+    return _build_simple_memory_payload(
+        title="🧠 当前记忆",
+        template="blue",
+        lines=lines,
+    )
+
+
+def _build_simple_memory_payload(title: str, template: str, lines: list[str]) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": template,
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [_markdown_block("\n".join(lines))],
             },
         },
     }

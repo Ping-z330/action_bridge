@@ -71,6 +71,48 @@ def _help_event(message_id: str = "om_help_1", chat_id: str = "oc_source") -> di
     }
 
 
+def _remember_event(text: str, message_id: str = "om_remember_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": f'{{"text": "{text}"}}',
+            }
+        },
+    }
+
+
+def _memory_event(message_id: str = "om_memory_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": '{"text": "/memory"}',
+            }
+        },
+    }
+
+
+def _forget_event(alias: str, message_id: str = "om_forget_1", chat_id: str = "oc_source") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": f'{{"text": "/forget {alias}"}}',
+            }
+        },
+    }
+
+
 def _natural_language_event(text: str, message_id: str = "om_agent_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
@@ -300,6 +342,52 @@ def test_feishu_events_sends_help_card_for_help_command(client, monkeypatch) -> 
     assert sent_receive_ids == ["oc_source"]
 
 
+def test_feishu_events_remembers_lists_and_forgets_alias(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    saved_items = []
+    listed_batches = []
+    deleted_items = []
+
+    def fake_saved(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        saved_items.append(item)
+        return "sent"
+
+    def fake_list(items, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        listed_batches.append(list(items))
+        return "sent"
+
+    def fake_deleted(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        deleted_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_memory_saved_notice", fake_saved)
+    monkeypatch.setattr(routes, "send_memory_list_summary", fake_list)
+    monkeypatch.setattr(routes, "send_memory_deleted_notice", fake_deleted)
+
+    remember_response = client.post("/api/feishu/events", json=_remember_event("/remember project 官网 = 官网改版"))
+    list_response = client.post("/api/feishu/events", json=_memory_event())
+    forget_response = client.post("/api/feishu/events", json=_forget_event("官网"))
+
+    assert remember_response.status_code == 200
+    assert remember_response.json()["status"] == "memory_saved"
+    assert remember_response.json()["alias"] == "官网"
+    assert remember_response.json()["target"] == "官网改版"
+    assert saved_items[0].memory_type == "project"
+
+    assert list_response.status_code == 200
+    assert list_response.json()["status"] == "memory_listed"
+    assert list_response.json()["memory_count"] == 1
+    assert listed_batches[0][0].alias == "官网"
+
+    assert forget_response.status_code == 200
+    assert forget_response.json()["status"] == "memory_deleted"
+    assert deleted_items[0].alias == "官网"
+
+
 def test_feishu_events_sends_single_task_detail(client, monkeypatch) -> None:
     import app.api.routes as routes
 
@@ -497,6 +585,40 @@ def test_feishu_events_agent_sends_project_progress_summary(client, monkeypatch)
     assert response.json()["task_count"] == 2
     assert sent_summaries[0].keyword == "官网改版"
     assert sent_summaries[0].total_count == 2
+
+
+def test_feishu_events_agent_uses_memory_alias_for_project_summary(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    client.post(
+        "/api/meetings",
+        json={
+            "title": "官网改版上线会",
+            "transcript": "\n".join(
+                [
+                    "Action: Frontend fixes mobile navigation issue.",
+                    "Action: QA supplements regression cases.",
+                ]
+            ),
+        },
+    )
+    client.post("/api/feishu/events", json=_remember_event("/remember 官网 = 官网改版", message_id="om_remember_alias"))
+    sent_summaries = []
+
+    def fake_send(summary, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_summaries.append(summary)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_project_progress_summary", fake_send)
+
+    response = client.post("/api/feishu/events", json=_natural_language_event("官网进度怎么样", message_id="om_alias_query"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_replied"
+    assert response.json()["intent"] == "summarize_project"
+    assert response.json()["task_count"] == 2
+    assert sent_summaries[0].keyword == "官网改版"
 
 
 def test_feishu_events_agent_sends_help_card_for_natural_language(client, monkeypatch) -> None:

@@ -7,6 +7,8 @@ from app.services.feishu_service import (
     _build_follow_up_card_payload,
     _build_help_card_payload,
     _build_meeting_card_payload,
+    _build_memory_list_payload,
+    _build_memory_saved_payload,
     _build_open_tasks_payload,
     _build_project_progress_payload,
     _build_task_detail_payload,
@@ -14,6 +16,7 @@ from app.services.feishu_service import (
     extract_card_callback_action,
 )
 from app.agent.schemas import ProjectProgressSummary
+from app.schemas.memory import MemoryAliasItem
 
 
 def build_meeting() -> MeetingResponse:
@@ -179,6 +182,33 @@ def test_build_help_card_payload_lists_commands_and_examples() -> None:
     assert "/task 12" in combined
     assert "/done 12" in combined
     assert "官网改版进度怎么样" in combined
+
+
+def test_build_memory_payloads_show_alias_mapping() -> None:
+    item = MemoryAliasItem(
+        id=1,
+        alias="官网",
+        target="官网改版",
+        memory_type="project",
+        created_at=datetime.now(UTC),
+    )
+
+    saved_payload = _build_memory_saved_payload(item)
+    list_payload = _build_memory_list_payload([item])
+
+    saved_contents = [
+        element["content"]
+        for element in saved_payload["card"]["body"]["elements"]
+        if element["tag"] == "markdown"
+    ]
+    list_contents = [
+        element["content"]
+        for element in list_payload["card"]["body"]["elements"]
+        if element["tag"] == "markdown"
+    ]
+    assert "官网" in "\n".join(saved_contents)
+    assert "官网改版" in "\n".join(saved_contents)
+    assert "`官网` = `官网改版`" in "\n".join(list_contents)
 
 
 def test_post_app_bot_card_sends_interactive_message(monkeypatch) -> None:

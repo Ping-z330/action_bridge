@@ -25,6 +25,23 @@ def run_lightweight_migrations() -> None:
             connection.execute(text("CREATE INDEX ix_feishu_event_logs_id ON feishu_event_logs (id)"))
             connection.execute(text("CREATE UNIQUE INDEX ix_feishu_event_logs_event_key ON feishu_event_logs (event_key)"))
 
+        if "memory_aliases" not in table_names:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE memory_aliases (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        alias VARCHAR(120) NOT NULL UNIQUE,
+                        target VARCHAR(255) NOT NULL,
+                        memory_type VARCHAR(32) DEFAULT 'alias' NOT NULL,
+                        created_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX ix_memory_aliases_id ON memory_aliases (id)"))
+            connection.execute(text("CREATE UNIQUE INDEX ix_memory_aliases_alias ON memory_aliases (alias)"))
+
     if "action_items" not in table_names:
         return
 

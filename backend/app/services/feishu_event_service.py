@@ -28,6 +28,23 @@ class FeishuHelpCommand:
     pass
 
 
+@dataclass(frozen=True)
+class FeishuRememberCommand:
+    alias: str
+    target: str
+    memory_type: str = "alias"
+
+
+@dataclass(frozen=True)
+class FeishuForgetCommand:
+    alias: str
+
+
+@dataclass(frozen=True)
+class FeishuMemoryCommand:
+    pass
+
+
 def extract_challenge(payload: dict[str, Any]) -> str | None:
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
@@ -169,6 +186,59 @@ def extract_help_command(payload: dict[str, Any]) -> FeishuHelpCommand | None:
     command_text = text.strip()
     if command_text.split()[0] == "/help":
         return FeishuHelpCommand()
+
+    return None
+
+
+def extract_remember_command(payload: dict[str, Any]) -> FeishuRememberCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_text = text.strip()
+    if not command_text.startswith("/remember"):
+        return None
+
+    body = command_text.removeprefix("/remember").strip()
+    if "=" not in body:
+        raise ValueError("Invalid /remember command. Expected: /remember <alias> = <target>.")
+
+    raw_alias, raw_target = [part.strip() for part in body.split("=", 1)]
+    memory_type = "alias"
+    alias_parts = raw_alias.split(maxsplit=1)
+    if len(alias_parts) == 2 and alias_parts[0] in {"project", "user", "team", "alias"}:
+        memory_type = alias_parts[0]
+        raw_alias = alias_parts[1].strip()
+
+    if not raw_alias or not raw_target:
+        raise ValueError("Invalid /remember command. alias and target are required.")
+
+    return FeishuRememberCommand(alias=raw_alias, target=raw_target, memory_type=memory_type)
+
+
+def extract_forget_command(payload: dict[str, Any]) -> FeishuForgetCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_text = text.strip()
+    if not command_text.startswith("/forget"):
+        return None
+
+    alias = command_text.removeprefix("/forget").strip()
+    if not alias:
+        raise ValueError("Invalid /forget command. Expected: /forget <alias>.")
+
+    return FeishuForgetCommand(alias=alias)
+
+
+def extract_memory_command(payload: dict[str, Any]) -> FeishuMemoryCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    if text.strip().split()[0] == "/memory":
+        return FeishuMemoryCommand()
 
     return None
 
