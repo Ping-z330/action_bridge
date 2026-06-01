@@ -443,6 +443,16 @@ def _build_help_card_payload() -> dict[str, Any]:
                             ]
                         )
                     ),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**记忆库**",
+                                "`/remember 官网 = 官网改版` 记住项目/成员别名",
+                                "`/memory` 查看当前记忆",
+                                "`/forget 官网` 删除一条记忆",
+                            ]
+                        )
+                    ),
                     _divider(),
                     _markdown_block("**回复范围**\n私聊触发会回复私聊；群里触发会回复原群；后台发送和自动提醒会发到默认群。"),
                 ],

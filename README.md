@@ -22,6 +22,7 @@ ActionBridge 是一个“会议纪要到执行闭环”的办公协作 Agent MVP
 - 飞书机器人：支持 Webhook 机器人和自建应用机器人。
 - 飞书上下文回复：私聊触发回复私聊，群聊触发回复原群，后台发送和自动提醒发送默认群。
 - 轻量 Agent：支持自然语言查询任务、更新任务状态、总结项目进度和查看帮助。
+- 结构化 Memory：支持项目别名、成员别名和团队术语映射，让 Agent 能理解团队内部说法。
 - 自动跟进：支持扫描未完成任务，并发送飞书跟进提醒。
 - 事件去重：基于飞书 `event_id/message_id` 做数据库级幂等去重，避免重复回调导致重复创建或重复发送。
 
@@ -40,8 +41,9 @@ flowchart TD
     C1 -->|否| D{固定命令?}
 
     D -->|/meeting| B
-    D -->|/tasks /task /done /help| E[命令处理]
-    D -->|普通文本| F[轻量 Agent 意图识别]
+    D -->|/tasks /task /done /help /remember| E[命令处理]
+    D -->|普通文本| F0[Memory 别名归一化]
+    F0 --> F[轻量 Agent 意图识别]
 
     B --> G[LLM 或规则解析]
     G --> G1[会议摘要]
@@ -110,6 +112,7 @@ flowchart TD
         A1[agent/service.py 意图识别]
         A2[agent/tools.py 工具调用]
         A3[agent/schemas.py 结构化响应]
+        A4[memory_service.py 别名记忆]
     end
 
     subgraph DB[SQLite 数据库]
@@ -135,6 +138,7 @@ flowchart TD
     B1 --> B2
     B1 --> B4
     B1 --> A1
+    B1 --> A4
     A1 --> A2
     A2 --> B2
 
@@ -175,6 +179,7 @@ ActionBridge/
       services/meeting_service.py    会议、行动项、飞书发送业务逻辑
       services/feishu_event_service.py 飞书消息事件解析
       services/feishu_service.py     飞书卡片生成与发送
+      services/memory_service.py     结构化 Memory 别名管理
       services/follow_up_service.py  未完成任务扫描与提醒
     tests/                           后端自动化测试
   frontend/
@@ -250,6 +255,26 @@ https://你的公网域名/api/feishu/events
 
 把任务 ID 为 12 的行动项标记为已完成。
 
+```text
+/remember 官网 = 官网改版
+/remember project 官网 = 官网改版
+/remember 张三 = 前端同学
+```
+
+记住团队内部别名。之后用户说“官网进度怎么样”，Agent 会先归一化为“官网改版进度怎么样”。
+
+```text
+/memory
+```
+
+查看当前已记住的别名。
+
+```text
+/forget 官网
+```
+
+删除一条别名记忆。
+
 ### 3. 自然语言 Agent 示例
 
 任务查询：
@@ -285,6 +310,13 @@ https://你的公网域名/api/feishu/events
 帮助
 你能做什么
 怎么使用
+```
+
+Memory 示例：
+
+```text
+/remember 官网 = 官网改版
+官网进度怎么样
 ```
 
 ### 4. 回复范围
@@ -394,7 +426,9 @@ npm run build
 - 截止日期与到期风险判断
 - 飞书卡片 payload
 - 飞书 `/meeting`、`/tasks`、`/task`、`/done`、`/help` 指令
+- 飞书 `/remember`、`/memory`、`/forget` Memory 指令
 - 飞书自然语言任务查询、任务更新、项目进度总结
+- Agent Memory 别名归一化
 - 飞书事件数据库级幂等去重
 - 自动跟进扫描
 
@@ -411,6 +445,7 @@ npm run build
 9. 在飞书中发送 `/tasks` 或自然语言查询任务。
 10. 在飞书中发送 `/done 任务ID` 或自然语言更新任务状态。
 11. 在飞书中发送“官网改版进度怎么样”，查看项目进度总结卡片。
+12. 在飞书中发送 `/remember 官网 = 官网改版`，再发送“官网进度怎么样”，验证 Memory 归一化。
 
 ## 当前能力总结
 
@@ -423,17 +458,19 @@ npm run build
 - 已实现飞书 `/task 任务ID` 查询单个任务详情。
 - 已实现飞书 `/done 任务ID` 标记任务完成。
 - 已实现飞书 `/help` 帮助卡片。
+- 已实现飞书 `/remember`、`/memory`、`/forget` 结构化 Memory。
 - 已实现飞书私聊/群聊上下文感知回复。
 - 已实现轻量 Agent 自然语言任务查询。
 - 已实现轻量 Agent 自然语言任务状态更新。
 - 已实现轻量 Agent 项目进度总结。
+- 已实现轻量 Agent 基于 Memory 的别名归一化。
 - 已实现飞书事件数据库级去重。
 - 已实现自动扫描未完成任务和飞书跟进提醒。
 
 ## 后续规划
 
 - 优化长文本展示：列表卡片截断、详情卡片展示完整内容。
-- 引入 Memory，记录团队成员别名、项目别名和常用查询偏好。
+- 增强 Memory，支持按类型分组展示、自然语言记忆和更细粒度的作用域。
 - 将 LLM 解析和飞书发送异步化，引入任务队列。
 - 从 SQLite 升级到 PostgreSQL，适配更真实的多人协作场景。
 - 接入 MCP，让 Agent 读取更多办公系统上下文。

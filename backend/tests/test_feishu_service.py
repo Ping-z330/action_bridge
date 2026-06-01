@@ -181,6 +181,9 @@ def test_build_help_card_payload_lists_commands_and_examples() -> None:
     assert "/tasks" in combined
     assert "/task 12" in combined
     assert "/done 12" in combined
+    assert "/remember 官网 = 官网改版" in combined
+    assert "/memory" in combined
+    assert "/forget 官网" in combined
     assert "官网改版进度怎么样" in combined
 
 
