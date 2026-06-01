@@ -306,6 +306,20 @@ def update_action_item_status(db: Session, action_item_id: int, status: str) -> 
     return next((item for item in list_action_items(db) if item.id == action_item_id), None)
 
 
+def update_action_item_deadline(db: Session, action_item_id: int, deadline: str) -> ActionItemListItem | None:
+    action_item = db.query(ActionItem).filter(ActionItem.id == action_item_id).first()
+    if not action_item:
+        return None
+
+    deadline_date, deadline_time = normalize_deadline(deadline, action_item.created_at)
+    action_item.deadline = build_deadline_text(deadline_date, deadline_time, deadline)
+    action_item.deadline_date = deadline_date
+    action_item.deadline_time = deadline_time
+    db.commit()
+
+    return next((item for item in list_action_items(db) if item.id == action_item_id), None)
+
+
 def _get_action_item_due_status(action_item: ActionItem) -> str:
     if action_item.deadline_date:
         return get_due_status_from_date(action_item.deadline_date, action_item.status)

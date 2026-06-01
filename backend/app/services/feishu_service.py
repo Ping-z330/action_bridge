@@ -67,6 +67,23 @@ def send_task_create_confirmation(
     return "任务创建确认卡片已发送到飞书。"
 
 
+def send_task_deadline_update_confirmation(
+    action_item_id: int,
+    title: str,
+    old_deadline: str,
+    new_deadline: str,
+    receive_id: str | None = None,
+) -> str:
+    payload = _build_task_deadline_update_confirmation_payload(
+        action_item_id,
+        title,
+        old_deadline,
+        new_deadline,
+    )
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务截止时间修改确认卡片已发送到飞书。"
+
+
 def send_pending_action_notice(title: str, message: str, receive_id: str | None = None) -> str:
     payload = _build_pending_action_notice_payload(title, message)
     _deliver_card_payload(payload, receive_id=receive_id)
@@ -420,6 +437,36 @@ def _build_task_create_confirmation_payload(title: str, owner_name: str, deadlin
     }
 
 
+def _build_task_deadline_update_confirmation_payload(
+    action_item_id: int,
+    title: str,
+    old_deadline: str,
+    new_deadline: str,
+) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"⏰ 请确认修改任务 #{action_item_id}"},
+                "template": "blue",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(f"**任务目标**\n{title}"),
+                    _markdown_block(f"**原截止时间**\n{old_deadline or '待确认'}"),
+                    _markdown_block(f"**新截止时间**\n{new_deadline}"),
+                    _divider(),
+                    _markdown_block("回复 `确认` 执行修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
+                ],
+            },
+        },
+    }
+
+
 def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, Any]:
     return {
         "msg_type": "interactive",
@@ -529,6 +576,7 @@ def _build_help_card_payload() -> dict[str, Any]:
                                 "**任务更新**",
                                 "`/done 12` 标记 12 号任务完成",
                                 "也可以说：`把 12 号任务标记完成`、`把 8 号任务改成进行中`、`9 号任务有风险`",
+                                "修改截止时间：`把 12 号任务延期到周五`，我会先让你确认。",
                             ]
                         )
                     ),

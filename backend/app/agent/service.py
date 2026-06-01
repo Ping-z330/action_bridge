@@ -63,6 +63,13 @@ def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -
             message=f"任务信息不完整，还需要补充：{intent.filters['missing_fields']}。",
         )
 
+    if intent.name == "update_task_deadline":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"准备修改任务 {intent.filters['action_item_id']} 的截止时间。",
+        )
+
     if intent.name == "update_task_status":
         return AgentResponse(
             handled=True,
@@ -104,6 +111,10 @@ def detect_intent(message: str) -> AgentIntent | None:
     create_task_intent = _detect_create_task_intent(normalized)
     if create_task_intent:
         return create_task_intent
+
+    deadline_update_intent = _detect_deadline_update_intent(normalized)
+    if deadline_update_intent:
+        return deadline_update_intent
 
     update_intent = _detect_status_update_intent(normalized)
     if update_intent:
@@ -174,6 +185,31 @@ def _detect_create_task_intent(message: str) -> AgentIntent | None:
         return AgentIntent(name="create_task_missing_info", filters=filters)
 
     return AgentIntent(name="create_task", filters=parsed)
+
+
+def _detect_deadline_update_intent(message: str) -> AgentIntent | None:
+    action_item_id = _extract_action_item_id(message)
+    if action_item_id is None:
+        return None
+
+    patterns = (
+        rf"(?:截止时间|截止日期)?\s*(?:延期到|延到|改到|改成|调整到|设置为)\s*(?P<deadline>{DEADLINE_PATTERN})",
+        rf"(?:延期|延后)\s*(?:到|至)?\s*(?P<deadline>{DEADLINE_PATTERN})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            deadline = _clean_task_field(match.group("deadline"))
+            if deadline:
+                return AgentIntent(
+                    name="update_task_deadline",
+                    filters={
+                        "action_item_id": str(action_item_id),
+                        "deadline": deadline,
+                    },
+                )
+
+    return None
 
 
 def _strip_create_task_prefix(message: str) -> str:

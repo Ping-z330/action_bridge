@@ -107,6 +107,15 @@ def test_detect_intent_for_create_task_missing_info() -> None:
     assert "截止时间" in intent.filters["missing_fields"]
 
 
+def test_detect_intent_for_update_task_deadline() -> None:
+    intent = detect_intent("把 12 号任务延期到周五")
+
+    assert intent is not None
+    assert intent.name == "update_task_deadline"
+    assert intent.filters["action_item_id"] == "12"
+    assert intent.filters["deadline"] == "周五"
+
+
 def test_handle_agent_message_filters_by_owner() -> None:
     items = [
         _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),
