@@ -36,8 +36,10 @@ from app.services.feishu_service import (
     send_memory_list_summary,
     send_memory_saved_notice,
     send_open_tasks_summary,
+    send_pending_action_notice,
     send_project_progress_summary,
     send_task_create_clarification,
+    send_task_create_confirmation,
     send_task_detail_summary,
 )
 from app.services.follow_up_service import run_follow_up_scan
@@ -58,6 +60,13 @@ from app.services.memory_service import (
     list_memory_aliases,
     normalize_message_with_memory,
     remember_alias,
+)
+from app.services.pending_agent_action_service import (
+    detect_confirmation_message,
+    get_active_pending_action,
+    load_pending_payload,
+    resolve_pending_action,
+    save_pending_create_task,
 )
 
 router = APIRouter(prefix="/api")
@@ -169,6 +178,7 @@ def handle_feishu_events(
         return {"challenge": challenge}
 
     reply_chat_id = extract_reply_chat_id(payload)
+    pending_chat_id = reply_chat_id or "default"
 
     try:
         done_command = extract_done_command(payload)
@@ -182,17 +192,23 @@ def handle_feishu_events(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if (
-        not done_command
-        and not task_command
-        and not tasks_command
-        and not help_command
-        and not remember_command
-        and not memory_command
-        and not forget_command
-        and not meeting_command
-    ):
-        message_text = extract_message_text(payload)
+    message_text = extract_message_text(payload) or ""
+    has_fixed_command = any(
+        (
+            done_command,
+            task_command,
+            tasks_command,
+            help_command,
+            remember_command,
+            memory_command,
+            forget_command,
+            meeting_command,
+        )
+    )
+    confirmation_action = None if has_fixed_command else detect_confirmation_message(message_text)
+    agent_response = None
+
+    if not has_fixed_command and not confirmation_action:
         if not message_text:
             return {"status": "ignored", "message": "No supported command found."}
 
@@ -219,8 +235,12 @@ def handle_feishu_events(
         if forget_command
         else "meeting"
         if meeting_command
+        else "confirm"
+        if confirmation_action == "confirm"
+        else "cancel"
+        if confirmation_action == "cancel"
         else agent_response.intent.name
-        if agent_response.intent
+        if agent_response and agent_response.intent
         else "agent"
     )
     if not register_feishu_event(db, dedup_key, command_type):
@@ -390,6 +410,66 @@ def handle_feishu_events(
 
     if not meeting_command:
         message_text = extract_message_text(payload) or ""
+        confirmation_action = detect_confirmation_message(message_text)
+        if confirmation_action:
+            pending = get_active_pending_action(db, pending_chat_id)
+            if not pending:
+                mark_feishu_event_finished(db, dedup_key, "ignored")
+                try:
+                    send_pending_action_notice(
+                        "ℹ️ 没有待确认操作",
+                        "当前没有需要确认的任务创建请求。你可以重新发送一句创建任务的话。",
+                        receive_id=reply_chat_id,
+                    )
+                except FeishuDeliveryError:
+                    pass
+                return {"status": "no_pending_action", "message": "No pending action found."}
+
+            if confirmation_action == "cancel":
+                resolve_pending_action(db, pending, "cancelled")
+                try:
+                    send_pending_action_notice(
+                        "已取消",
+                        "已取消这次待确认的任务创建请求。",
+                        receive_id=reply_chat_id,
+                    )
+                except FeishuDeliveryError as exc:
+                    mark_feishu_event_finished(db, dedup_key, "finished")
+                    return {
+                        "status": "pending_cancelled",
+                        "message": f"Pending action cancelled, but Feishu delivery failed: {exc}",
+                    }
+
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {"status": "pending_cancelled", "message": "Pending action cancelled."}
+
+            payload_data = load_pending_payload(pending)
+            action_item = create_action_item_from_agent(
+                db,
+                title=payload_data["title"],
+                owner_name=payload_data["owner_name"],
+                deadline=payload_data["deadline"],
+            )
+            resolve_pending_action(db, pending, "confirmed")
+            try:
+                send_task_detail_summary(action_item, receive_id=reply_chat_id)
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "agent_created",
+                    "intent": "confirm_create_task",
+                    "action_item_id": action_item.id,
+                    "message": f"Task created, but Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "agent_created",
+                "intent": "confirm_create_task",
+                "action_item_id": action_item.id,
+                "message": "Task created after confirmation.",
+            }
+
         normalized_message = normalize_message_with_memory(db, message_text)
         agent_response = handle_agent_message(normalized_message, list_action_items(db))
         if not agent_response.handled:
@@ -433,29 +513,33 @@ def handle_feishu_events(
             }
 
         if agent_response.intent and agent_response.intent.name == "create_task":
-            action_item = create_action_item_from_agent(
+            save_pending_create_task(
                 db,
+                chat_id=pending_chat_id,
                 title=agent_response.intent.filters["title"],
                 owner_name=agent_response.intent.filters["owner_name"],
                 deadline=agent_response.intent.filters["deadline"],
             )
             try:
-                send_task_detail_summary(action_item, receive_id=reply_chat_id)
+                send_task_create_confirmation(
+                    title=agent_response.intent.filters["title"],
+                    owner_name=agent_response.intent.filters["owner_name"],
+                    deadline=agent_response.intent.filters["deadline"],
+                    receive_id=reply_chat_id,
+                )
             except FeishuDeliveryError as exc:
                 mark_feishu_event_finished(db, dedup_key, "finished")
                 return {
-                    "status": "agent_created",
+                    "status": "task_create_pending",
                     "intent": agent_response.intent.name,
-                    "action_item_id": action_item.id,
-                    "message": f"Task created, but Feishu delivery failed: {exc}",
+                    "message": f"Task create confirmation saved, but Feishu delivery failed: {exc}",
                 }
 
             mark_feishu_event_finished(db, dedup_key, "finished")
             return {
-                "status": "agent_created",
+                "status": "task_create_pending",
                 "intent": agent_response.intent.name,
-                "action_item_id": action_item.id,
-                "message": "Task created.",
+                "message": "Task create confirmation requested.",
             }
 
         if agent_response.intent and agent_response.intent.name == "update_task_status":

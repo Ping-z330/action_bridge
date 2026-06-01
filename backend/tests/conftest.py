@@ -14,6 +14,7 @@ from app.models.feishu_event_log import FeishuEventLog
 from app.models.follow_up_log import FollowUpLog
 from app.models.memory_alias import MemoryAlias
 from app.models.meeting import Meeting
+from app.models.pending_agent_action import PendingAgentAction
 from app.models.task import Task
 
 
@@ -23,6 +24,7 @@ def clean_database() -> Generator[None, None, None]:
     try:
         db.query(FollowUpLog).delete()
         db.query(FeishuEventLog).delete()
+        db.query(PendingAgentAction).delete()
         db.query(MemoryAlias).delete()
         db.query(ActionItem).delete()
         db.query(Task).delete()
@@ -32,6 +34,7 @@ def clean_database() -> Generator[None, None, None]:
     finally:
         db.query(FollowUpLog).delete()
         db.query(FeishuEventLog).delete()
+        db.query(PendingAgentAction).delete()
         db.query(MemoryAlias).delete()
         db.query(ActionItem).delete()
         db.query(Task).delete()

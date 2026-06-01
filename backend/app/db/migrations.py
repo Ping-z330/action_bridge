@@ -42,6 +42,25 @@ def run_lightweight_migrations() -> None:
             connection.execute(text("CREATE INDEX ix_memory_aliases_id ON memory_aliases (id)"))
             connection.execute(text("CREATE UNIQUE INDEX ix_memory_aliases_alias ON memory_aliases (alias)"))
 
+        if "pending_agent_actions" not in table_names:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE pending_agent_actions (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        chat_id VARCHAR(128) NOT NULL,
+                        action_type VARCHAR(64) NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        status VARCHAR(32) DEFAULT 'pending' NOT NULL,
+                        created_at DATETIME NOT NULL,
+                        expires_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX ix_pending_agent_actions_id ON pending_agent_actions (id)"))
+            connection.execute(text("CREATE INDEX ix_pending_agent_actions_chat_id ON pending_agent_actions (chat_id)"))
+
     if "action_items" not in table_names:
         return
 

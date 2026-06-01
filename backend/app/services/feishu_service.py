@@ -56,6 +56,23 @@ def send_task_create_clarification(message: str, receive_id: str | None = None) 
     return "任务创建补充信息提示已发送到飞书。"
 
 
+def send_task_create_confirmation(
+    title: str,
+    owner_name: str,
+    deadline: str,
+    receive_id: str | None = None,
+) -> str:
+    payload = _build_task_create_confirmation_payload(title, owner_name, deadline)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务创建确认卡片已发送到飞书。"
+
+
+def send_pending_action_notice(title: str, message: str, receive_id: str | None = None) -> str:
+    payload = _build_pending_action_notice_payload(title, message)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "待确认操作提示已发送到飞书。"
+
+
 def send_project_progress_summary(summary: ProjectProgressSummary, receive_id: str | None = None) -> str:
     payload = _build_project_progress_payload(summary)
     _deliver_card_payload(payload, receive_id=receive_id)
@@ -378,6 +395,50 @@ def _build_task_create_clarification_payload(message: str) -> dict[str, Any]:
     }
 
 
+def _build_task_create_confirmation_payload(title: str, owner_name: str, deadline: str) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "📝 请确认创建任务"},
+                "template": "blue",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(f"**任务目标**\n{title}"),
+                    _markdown_block(f"**负责人**\n{owner_name}"),
+                    _markdown_block(f"**截止时间**\n{deadline}"),
+                    _divider(),
+                    _markdown_block("回复 `确认` 创建任务，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
+                ],
+            },
+        },
+    }
+
+
+def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": "orange",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [_markdown_block(message)],
+            },
+        },
+    }
+
+
 def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str, Any]:
     template = (
         "red"
@@ -476,7 +537,7 @@ def _build_help_card_payload() -> dict[str, Any]:
                             [
                                 "**任务创建**",
                                 "可以说：`帮我加一个任务，前端同学周五前完成登录页联调`",
-                                "我会创建行动项，并挂到“飞书临时任务”中。",
+                                "我会先让你确认，确认后创建行动项并挂到“飞书临时任务”中。",
                             ]
                         )
                     ),

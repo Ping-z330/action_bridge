@@ -542,10 +542,36 @@ def test_feishu_events_agent_updates_task_status(client, monkeypatch) -> None:
     assert updated_item["status"] == "completed"
 
 
-def test_feishu_events_agent_creates_task_from_natural_language(client, monkeypatch) -> None:
+def test_feishu_events_agent_asks_confirmation_before_creating_task(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_confirmations = []
+
+    def fake_send(title: str, owner_name: str, deadline: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_confirmations.append((title, owner_name, deadline))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_create_confirmation", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("帮我加一个任务，前端同学周五前完成登录页联调", message_id="om_create_task"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_create_pending"
+    assert response.json()["intent"] == "create_task"
+    assert sent_confirmations == [("登录页联调", "前端同学", "周五前")]
+    assert client.get("/api/action-items").json() == []
+
+
+def test_feishu_events_agent_creates_task_after_confirmation(client, monkeypatch) -> None:
     import app.api.routes as routes
 
     sent_items = []
+
+    monkeypatch.setattr(routes, "send_task_create_confirmation", lambda *_args, **_kwargs: "sent")
 
     def fake_send(item, receive_id: str | None = None) -> str:
         assert receive_id == "oc_source"
@@ -554,14 +580,20 @@ def test_feishu_events_agent_creates_task_from_natural_language(client, monkeypa
 
     monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
 
-    response = client.post(
+    pending_response = client.post(
         "/api/feishu/events",
         json=_natural_language_event("帮我加一个任务，前端同学周五前完成登录页联调", message_id="om_create_task"),
     )
+    confirm_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("确认", message_id="om_confirm_create_task"),
+    )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "agent_created"
-    assert response.json()["intent"] == "create_task"
+    assert pending_response.status_code == 200
+    assert pending_response.json()["status"] == "task_create_pending"
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["status"] == "agent_created"
+    assert confirm_response.json()["intent"] == "confirm_create_task"
     assert sent_items[0].title == "登录页联调"
     assert sent_items[0].owner_name == "前端同学"
     assert sent_items[0].deadline_date
@@ -569,9 +601,38 @@ def test_feishu_events_agent_creates_task_from_natural_language(client, monkeypa
     assert sent_items[0].meeting_title == "飞书临时任务"
 
     tasks_response = client.get("/api/action-items")
-    created = [item for item in tasks_response.json() if item["id"] == response.json()["action_item_id"]][0]
+    created = [item for item in tasks_response.json() if item["id"] == confirm_response.json()["action_item_id"]][0]
     assert created["title"] == "登录页联调"
     assert created["status"] == "pending"
+
+
+def test_feishu_events_agent_cancels_pending_create_task(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_notices = []
+
+    monkeypatch.setattr(routes, "send_task_create_confirmation", lambda *_args, **_kwargs: "sent")
+
+    def fake_notice(title: str, message: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_notices.append((title, message))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_pending_action_notice", fake_notice)
+
+    client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("帮我加一个任务，前端同学周五前完成登录页联调", message_id="om_create_task"),
+    )
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("取消", message_id="om_cancel_create_task"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending_cancelled"
+    assert "已取消" in sent_notices[0][0]
+    assert client.get("/api/action-items").json() == []
 
 
 def test_feishu_events_agent_create_task_missing_info_prompts_user(client, monkeypatch) -> None:
