@@ -16,6 +16,9 @@ from app.services.feishu_service import FeishuDeliveryError, send_follow_up_summ
 from app.services.parser_service import parse_transcript
 
 
+AGENT_CREATED_MEETING_TITLE = "飞书临时任务"
+
+
 def create_meeting_with_actions(db: Session, payload: MeetingCreate) -> MeetingResponse:
     meeting = Meeting(
         title=payload.title,
@@ -148,6 +151,61 @@ def list_action_items(db: Session) -> list[ActionItemListItem]:
         )
 
     return results
+
+
+def create_action_item_from_agent(
+    db: Session,
+    title: str,
+    owner_name: str,
+    deadline: str,
+) -> ActionItemListItem:
+    meeting = _get_or_create_agent_created_meeting(db)
+    deadline_date, deadline_time = normalize_deadline(deadline, meeting.created_at)
+    action_item = ActionItem(
+        meeting_id=meeting.id,
+        title=title,
+        owner_name=owner_name,
+        deadline=build_deadline_text(deadline_date, deadline_time, deadline),
+        deadline_date=deadline_date,
+        deadline_time=deadline_time,
+        status="pending",
+    )
+    db.add(action_item)
+    db.add(
+        Task(
+            meeting_id=meeting.id,
+            task_type="agent_create_action_item",
+            status="completed",
+            input_json=json.dumps(
+                {
+                    "title": title,
+                    "owner_name": owner_name,
+                    "deadline": deadline,
+                },
+                ensure_ascii=False,
+            ),
+            output_json="{}",
+        )
+    )
+    db.commit()
+
+    return next(item for item in list_action_items(db) if item.id == action_item.id)
+
+
+def _get_or_create_agent_created_meeting(db: Session) -> Meeting:
+    meeting = db.query(Meeting).filter(Meeting.title == AGENT_CREATED_MEETING_TITLE).first()
+    if meeting:
+        return meeting
+
+    meeting = Meeting(
+        title=AGENT_CREATED_MEETING_TITLE,
+        raw_transcript="由飞书自然语言消息创建的临时行动项。",
+        summary="这里汇总从飞书自然语言对话中直接创建的行动项。",
+        decisions="[]",
+    )
+    db.add(meeting)
+    db.flush()
+    return meeting
 
 
 def get_meeting_by_id(db: Session, meeting_id: int) -> MeetingResponse | None:

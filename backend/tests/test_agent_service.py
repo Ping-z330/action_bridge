@@ -88,6 +88,25 @@ def test_detect_intent_for_help_message() -> None:
     assert intent.name == "help"
 
 
+def test_detect_intent_for_create_task() -> None:
+    intent = detect_intent("帮我加一个任务，前端同学周五前完成登录页联调")
+
+    assert intent is not None
+    assert intent.name == "create_task"
+    assert intent.filters["owner_name"] == "前端同学"
+    assert intent.filters["deadline"] == "周五前"
+    assert intent.filters["title"] == "登录页联调"
+
+
+def test_detect_intent_for_create_task_missing_info() -> None:
+    intent = detect_intent("创建任务：登录页联调")
+
+    assert intent is not None
+    assert intent.name == "create_task_missing_info"
+    assert "负责人" in intent.filters["missing_fields"]
+    assert "截止时间" in intent.filters["missing_fields"]
+
+
 def test_handle_agent_message_filters_by_owner() -> None:
     items = [
         _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),

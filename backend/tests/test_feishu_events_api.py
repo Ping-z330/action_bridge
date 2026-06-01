@@ -542,6 +542,63 @@ def test_feishu_events_agent_updates_task_status(client, monkeypatch) -> None:
     assert updated_item["status"] == "completed"
 
 
+def test_feishu_events_agent_creates_task_from_natural_language(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_items = []
+
+    def fake_send(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("帮我加一个任务，前端同学周五前完成登录页联调", message_id="om_create_task"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_created"
+    assert response.json()["intent"] == "create_task"
+    assert sent_items[0].title == "登录页联调"
+    assert sent_items[0].owner_name == "前端同学"
+    assert sent_items[0].deadline_date
+    assert sent_items[0].deadline_time == "18:00"
+    assert sent_items[0].meeting_title == "飞书临时任务"
+
+    tasks_response = client.get("/api/action-items")
+    created = [item for item in tasks_response.json() if item["id"] == response.json()["action_item_id"]][0]
+    assert created["title"] == "登录页联调"
+    assert created["status"] == "pending"
+
+
+def test_feishu_events_agent_create_task_missing_info_prompts_user(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_messages = []
+
+    def fake_send(message: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_messages.append(message)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_create_clarification", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("创建任务：登录页联调", message_id="om_create_task_missing"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_create_needs_info"
+    assert response.json()["intent"] == "create_task_missing_info"
+    assert "负责人" in sent_messages[0]
+    assert "截止时间" in sent_messages[0]
+    assert client.get("/api/action-items").json() == []
+
+
 def test_feishu_events_agent_update_missing_action_item_returns_404(client, monkeypatch) -> None:
     import app.api.routes as routes
 

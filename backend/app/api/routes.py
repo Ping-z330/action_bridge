@@ -37,11 +37,13 @@ from app.services.feishu_service import (
     send_memory_saved_notice,
     send_open_tasks_summary,
     send_project_progress_summary,
+    send_task_create_clarification,
     send_task_detail_summary,
 )
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
+    create_action_item_from_agent,
     create_meeting_with_actions,
     get_meeting_by_id,
     list_action_items,
@@ -410,6 +412,50 @@ def handle_feishu_events(
                 "status": "help_sent",
                 "intent": agent_response.intent.name,
                 "message": agent_response.message,
+            }
+
+        if agent_response.intent and agent_response.intent.name == "create_task_missing_info":
+            try:
+                send_task_create_clarification(agent_response.message, receive_id=reply_chat_id)
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "task_create_needs_info",
+                    "intent": agent_response.intent.name,
+                    "message": f"{agent_response.message} Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "task_create_needs_info",
+                "intent": agent_response.intent.name,
+                "message": agent_response.message,
+            }
+
+        if agent_response.intent and agent_response.intent.name == "create_task":
+            action_item = create_action_item_from_agent(
+                db,
+                title=agent_response.intent.filters["title"],
+                owner_name=agent_response.intent.filters["owner_name"],
+                deadline=agent_response.intent.filters["deadline"],
+            )
+            try:
+                send_task_detail_summary(action_item, receive_id=reply_chat_id)
+            except FeishuDeliveryError as exc:
+                mark_feishu_event_finished(db, dedup_key, "finished")
+                return {
+                    "status": "agent_created",
+                    "intent": agent_response.intent.name,
+                    "action_item_id": action_item.id,
+                    "message": f"Task created, but Feishu delivery failed: {exc}",
+                }
+
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "agent_created",
+                "intent": agent_response.intent.name,
+                "action_item_id": action_item.id,
+                "message": "Task created.",
             }
 
         if agent_response.intent and agent_response.intent.name == "update_task_status":

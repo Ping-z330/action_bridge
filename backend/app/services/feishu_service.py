@@ -50,6 +50,12 @@ def send_task_detail_summary(item: ActionItemListItem, receive_id: str | None = 
     return "任务详情卡片已发送到飞书。"
 
 
+def send_task_create_clarification(message: str, receive_id: str | None = None) -> str:
+    payload = _build_task_create_clarification_payload(message)
+    _deliver_card_payload(payload, receive_id=receive_id)
+    return "任务创建补充信息提示已发送到飞书。"
+
+
 def send_project_progress_summary(summary: ProjectProgressSummary, receive_id: str | None = None) -> str:
     payload = _build_project_progress_payload(summary)
     _deliver_card_payload(payload, receive_id=receive_id)
@@ -342,6 +348,36 @@ def _build_task_detail_payload(item: ActionItemListItem) -> dict[str, Any]:
     }
 
 
+def _build_task_create_clarification_payload(message: str) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "📝 任务信息待补充"},
+                "template": "orange",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": [
+                    _markdown_block(message),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**可按这个格式发送：**",
+                                "`帮我加一个任务，前端同学周五前完成登录页联调`",
+                                "`创建任务：设计同学 明天下午 产出首页 banner 图`",
+                            ]
+                        )
+                    ),
+                ],
+            },
+        },
+    }
+
+
 def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str, Any]:
     template = (
         "red"
@@ -432,6 +468,15 @@ def _build_help_card_payload() -> dict[str, Any]:
                                 "**任务更新**",
                                 "`/done 12` 标记 12 号任务完成",
                                 "也可以说：`把 12 号任务标记完成`、`把 8 号任务改成进行中`、`9 号任务有风险`",
+                            ]
+                        )
+                    ),
+                    _markdown_block(
+                        "\n".join(
+                            [
+                                "**任务创建**",
+                                "可以说：`帮我加一个任务，前端同学周五前完成登录页联调`",
+                                "我会创建行动项，并挂到“飞书临时任务”中。",
                             ]
                         )
                     ),

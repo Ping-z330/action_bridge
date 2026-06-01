@@ -18,6 +18,24 @@ TASK_QUERY_KEYWORDS = (
     "负责",
 )
 
+CREATE_TASK_TRIGGERS = (
+    "加一个任务",
+    "加个任务",
+    "创建任务",
+    "新增任务",
+    "新增行动项",
+    "添加任务",
+    "安排一个任务",
+)
+
+DEADLINE_PATTERN = (
+    r"(?:今天|今日|明天|后天|本周[一二三四五六日天]|下周[一二三四五六日天]|"
+    r"周[一二三四五六日天]|星期[一二三四五六日天]|"
+    r"\d{4}-\d{1,2}-\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日)"
+    r"(?:\s*(?:上午|中午|下午|晚上|今晚|下班前|晚些时候|"
+    r"\d{1,2}(?::|：|点)\d{0,2}))?(?:前|之前)?"
+)
+
 
 def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -> AgentResponse:
     intent = detect_intent(message)
@@ -29,6 +47,20 @@ def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -
             handled=True,
             intent=intent,
             message="已发送 ActionBridge 使用帮助。",
+        )
+
+    if intent.name == "create_task":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"准备创建任务：{intent.filters['title']}。",
+        )
+
+    if intent.name == "create_task_missing_info":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"任务信息不完整，还需要补充：{intent.filters['missing_fields']}。",
         )
 
     if intent.name == "update_task_status":
@@ -68,6 +100,10 @@ def detect_intent(message: str) -> AgentIntent | None:
 
     if _is_help_message(normalized):
         return AgentIntent(name="help")
+
+    create_task_intent = _detect_create_task_intent(normalized)
+    if create_task_intent:
+        return create_task_intent
 
     update_intent = _detect_status_update_intent(normalized)
     if update_intent:
@@ -117,6 +153,84 @@ def detect_intent(message: str) -> AgentIntent | None:
         return AgentIntent(name="query_tasks", filters={"open_only": "true"})
 
     return None
+
+
+def _detect_create_task_intent(message: str) -> AgentIntent | None:
+    if not any(trigger in message for trigger in CREATE_TASK_TRIGGERS):
+        return None
+
+    body = _strip_create_task_prefix(message)
+    parsed = _parse_create_task_body(body)
+    missing = [
+        label
+        for label, key in (("任务目标", "title"), ("负责人", "owner_name"), ("截止时间", "deadline"))
+        if not parsed.get(key)
+    ]
+
+    if missing:
+        filters = {key: value for key, value in parsed.items() if value}
+        filters["missing_fields"] = "、".join(missing)
+        filters["raw_text"] = body
+        return AgentIntent(name="create_task_missing_info", filters=filters)
+
+    return AgentIntent(name="create_task", filters=parsed)
+
+
+def _strip_create_task_prefix(message: str) -> str:
+    normalized = message.strip()
+    pattern = (
+        r"^(?:帮我|请|麻烦)?(?:加一个任务|加个任务|创建任务|新增任务|新增行动项|"
+        r"添加任务|安排一个任务)\s*[：:，,]?\s*"
+    )
+    return re.sub(pattern, "", normalized).strip()
+
+
+def _parse_create_task_body(body: str) -> dict[str, str]:
+    normalized = body.strip(" ，。！？：:；;")
+    if not normalized:
+        return {}
+
+    patterns = (
+        rf"^(?P<owner>.{{1,20}}?)\s*(?P<deadline>{DEADLINE_PATTERN})\s*(?P<title>.+)$",
+        rf"^(?P<owner>.{{1,20}}?)\s*(?:在|于)?(?P<deadline>{DEADLINE_PATTERN})\s*(?:前)?\s*(?P<title>.+)$",
+    )
+
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            owner = _clean_task_field(match.group("owner"))
+            deadline = _clean_task_field(match.group("deadline"))
+            title = _clean_task_title(match.group("title"))
+            return {
+                "title": title,
+                "owner_name": owner,
+                "deadline": deadline,
+            }
+
+    parsed: dict[str, str] = {}
+    deadline_match = re.search(DEADLINE_PATTERN, normalized)
+    if deadline_match:
+        parsed["deadline"] = _clean_task_field(deadline_match.group(0))
+        before_deadline = normalized[: deadline_match.start()]
+        after_deadline = normalized[deadline_match.end() :]
+        parsed["owner_name"] = _clean_task_field(before_deadline)
+        parsed["title"] = _clean_task_title(after_deadline)
+    else:
+        parsed["title"] = _clean_task_title(normalized)
+
+    return {key: value for key, value in parsed.items() if value}
+
+
+def _clean_task_field(value: str) -> str:
+    token = value.strip(" ，。！？：:；;、")
+    token = re.sub(r"^(由|让|请|给)\s*", "", token)
+    return token.strip()
+
+
+def _clean_task_title(value: str) -> str:
+    token = _clean_task_field(value)
+    token = re.sub(r"^(完成|负责完成|去完成)\s*", "", token)
+    return token.strip()
 
 
 def _is_help_message(message: str) -> bool:
