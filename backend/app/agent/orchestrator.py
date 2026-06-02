@@ -4,8 +4,8 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.agent.graph import run_agent_graph
 from app.agent.schemas import AgentResponse
-from app.agent.service import handle_agent_message
 from app.models.pending_agent_action import PendingAgentAction
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
@@ -17,7 +17,6 @@ from app.services.meeting_service import (
     update_action_item_owner,
     update_action_item_status,
 )
-from app.services.memory_service import normalize_message_with_memory
 from app.services.pending_agent_action_service import (
     detect_confirmation_message,
     detect_pending_revision,
@@ -65,8 +64,7 @@ def prepare_agent_text_event(
     if not message_text:
         return AgentTextPreparation(ignored=True)
 
-    normalized_message = normalize_message_with_memory(db, message_text)
-    agent_response = handle_agent_message(normalized_message, list_action_items(db))
+    agent_response = run_agent_graph(db, message_text)
     if not agent_response.handled:
         return AgentTextPreparation(ignored=True, agent_response=agent_response)
 
@@ -192,8 +190,7 @@ def handle_agent_text_event(
 
 
 def _build_agent_response(db: Session, message_text: str) -> AgentResponse:
-    normalized_message = normalize_message_with_memory(db, message_text)
-    return handle_agent_message(normalized_message, list_action_items(db))
+    return run_agent_graph(db, message_text)
 
 
 def _handle_confirmation(

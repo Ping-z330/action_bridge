@@ -19,6 +19,13 @@ from app.models.task import Task
 
 
 @pytest.fixture(autouse=True)
+def isolate_test_environment(monkeypatch) -> None:
+    import app.services.parser_service as parser_service
+
+    monkeypatch.setattr(parser_service, "PARSER_PROVIDER", "rules")
+
+
+@pytest.fixture(autouse=True)
 def clean_database() -> Generator[None, None, None]:
     db = SessionLocal()
     try:
