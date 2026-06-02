@@ -1,5 +1,6 @@
 import re
 
+from app.agent.llm_intent_service import detect_llm_intent
 from app.agent.schemas import AgentIntent, AgentResponse
 from app.agent.tools import filter_tasks, summarize_project_progress
 from app.schemas.task_result import ActionItemListItem
@@ -38,7 +39,7 @@ DEADLINE_PATTERN = (
 
 
 def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -> AgentResponse:
-    intent = detect_intent(message)
+    intent = detect_intent_with_fallback(message)
     if not intent:
         return AgentResponse(handled=False, message="No supported agent intent found.")
 
@@ -175,6 +176,13 @@ def detect_intent(message: str) -> AgentIntent | None:
         return AgentIntent(name="query_tasks", filters={"open_only": "true"})
 
     return None
+
+
+def detect_intent_with_fallback(message: str) -> AgentIntent | None:
+    rule_intent = detect_intent(message)
+    if rule_intent:
+        return rule_intent
+    return detect_llm_intent(message)
 
 
 def _detect_create_task_intent(message: str) -> AgentIntent | None:

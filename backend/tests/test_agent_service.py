@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from app.agent.service import detect_intent, handle_agent_message
+from app.agent.schemas import AgentIntent
+from app.agent.service import detect_intent, detect_intent_with_fallback, handle_agent_message
 from app.schemas.task_result import ActionItemListItem
 
 
@@ -166,6 +167,26 @@ def test_handle_agent_message_summarizes_project_progress() -> None:
     assert response.progress_summary.completed_count == 1
     assert response.progress_summary.overdue_count == 1
     assert response.progress_summary.completion_rate == 50.0
+
+
+def test_detect_intent_with_fallback_uses_llm_when_rules_miss(monkeypatch) -> None:
+    import app.agent.service as agent_service
+
+    def fake_detect_llm_intent(message: str) -> AgentIntent:
+        assert message == "12 这个事情先别给前端了，测试同学来跟"
+        return AgentIntent(
+            name="update_task_owner",
+            filters={"action_item_id": "12", "owner_name": "测试同学"},
+        )
+
+    monkeypatch.setattr(agent_service, "detect_llm_intent", fake_detect_llm_intent)
+
+    intent = detect_intent_with_fallback("12 这个事情先别给前端了，测试同学来跟")
+
+    assert intent is not None
+    assert intent.name == "update_task_owner"
+    assert intent.filters["action_item_id"] == "12"
+    assert intent.filters["owner_name"] == "测试同学"
 
 
 def test_handle_agent_message_ignores_unrelated_chat() -> None:
