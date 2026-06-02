@@ -4,8 +4,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-import app.agent.orchestrator as agent_orchestrator
-import app.services.feishu_command_handler as feishu_command_handler
 from app.agent.orchestrator import handle_agent_text_event
 from app.db.session import SessionLocal, get_db
 from app.schemas.action_item import ActionItemUpdate, FeishuCardCallbackResponse
@@ -34,6 +32,7 @@ from app.services.feishu_service import (
     send_task_owner_update_confirmation,
 )
 from app.services.feishu_command_handler import handle_fixed_feishu_command
+from app.services.feishu_delivery import FeishuDeliveryPort
 from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
@@ -49,26 +48,23 @@ from app.services.meeting_service import (
 router = APIRouter(prefix="/api")
 
 
-def _sync_agent_delivery_dependencies() -> None:
-    """Keep legacy route-level monkeypatches effective while Agent flow is extracted."""
-    for name in (
-        "send_action_item_completed_notice",
-        "send_help_card",
-        "send_memory_deleted_notice",
-        "send_memory_list_summary",
-        "send_memory_saved_notice",
-        "send_open_tasks_summary",
-        "send_pending_action_notice",
-        "send_project_progress_summary",
-        "send_task_create_clarification",
-        "send_task_create_confirmation",
-        "send_task_deadline_update_confirmation",
-        "send_task_detail_summary",
-        "send_task_not_found_notice",
-        "send_task_owner_update_confirmation",
-    ):
-        setattr(agent_orchestrator, name, globals()[name])
-        setattr(feishu_command_handler, name, globals()[name])
+def _build_feishu_delivery() -> FeishuDeliveryPort:
+    return FeishuDeliveryPort(
+        send_action_item_completed_notice=send_action_item_completed_notice,
+        send_help_card=send_help_card,
+        send_memory_deleted_notice=send_memory_deleted_notice,
+        send_memory_list_summary=send_memory_list_summary,
+        send_memory_saved_notice=send_memory_saved_notice,
+        send_open_tasks_summary=send_open_tasks_summary,
+        send_pending_action_notice=send_pending_action_notice,
+        send_project_progress_summary=send_project_progress_summary,
+        send_task_create_clarification=send_task_create_clarification,
+        send_task_create_confirmation=send_task_create_confirmation,
+        send_task_deadline_update_confirmation=send_task_deadline_update_confirmation,
+        send_task_detail_summary=send_task_detail_summary,
+        send_task_not_found_notice=send_task_not_found_notice,
+        send_task_owner_update_confirmation=send_task_owner_update_confirmation,
+    )
 
 
 def process_feishu_meeting_command(title: str, transcript: str, receive_id: str | None = None) -> None:
@@ -182,7 +178,7 @@ def handle_feishu_events(
     if event.ignored:
         return {"status": "ignored", "message": event.ignored_message}
 
-    _sync_agent_delivery_dependencies()
+    delivery = _build_feishu_delivery()
     if not register_feishu_event(db, event.dedup_key, event.command_type):
         return {"status": "duplicated", "message": "Duplicated Feishu event ignored."}
 
@@ -198,6 +194,7 @@ def handle_feishu_events(
         follow_up_reply=event.follow_up_reply,
         dedup_key=event.dedup_key,
         reply_chat_id=event.reply_chat_id,
+        delivery=delivery,
     )
     if fixed_response:
         return fixed_response
@@ -210,6 +207,7 @@ def handle_feishu_events(
             reply_chat_id=event.reply_chat_id,
             pending_chat_id=event.pending_chat_id,
             dedup_key=event.dedup_key,
+            delivery=delivery,
         )
 
     background_tasks.add_task(

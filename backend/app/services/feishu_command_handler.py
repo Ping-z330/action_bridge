@@ -4,17 +4,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import send_task_not_found_response
+from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
-from app.services.feishu_service import (
-    FeishuDeliveryError,
-    send_action_item_completed_notice,
-    send_help_card,
-    send_memory_deleted_notice,
-    send_memory_list_summary,
-    send_memory_saved_notice,
-    send_open_tasks_summary,
-    send_task_detail_summary,
-)
+from app.services.feishu_service import FeishuDeliveryError
 from app.services.follow_up_service import record_follow_up_reply
 from app.services.meeting_service import (
     complete_action_item,
@@ -37,23 +29,25 @@ def handle_fixed_feishu_command(
     follow_up_reply: Any | None,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort | None = None,
 ) -> dict[str, Any] | None:
+    delivery = delivery or get_default_feishu_delivery()
     if done_command:
-        return _handle_done_command(db, done_command, dedup_key, reply_chat_id)
+        return _handle_done_command(db, done_command, dedup_key, reply_chat_id, delivery)
     if task_command:
-        return _handle_task_command(db, task_command, dedup_key, reply_chat_id)
+        return _handle_task_command(db, task_command, dedup_key, reply_chat_id, delivery)
     if tasks_command:
-        return _handle_tasks_command(db, tasks_command, dedup_key, reply_chat_id)
+        return _handle_tasks_command(db, tasks_command, dedup_key, reply_chat_id, delivery)
     if help_command:
-        return _handle_help_command(db, dedup_key, reply_chat_id)
+        return _handle_help_command(db, dedup_key, reply_chat_id, delivery)
     if remember_command:
-        return _handle_remember_command(db, remember_command, dedup_key, reply_chat_id)
+        return _handle_remember_command(db, remember_command, dedup_key, reply_chat_id, delivery)
     if memory_command:
-        return _handle_memory_command(db, dedup_key, reply_chat_id)
+        return _handle_memory_command(db, dedup_key, reply_chat_id, delivery)
     if forget_command:
-        return _handle_forget_command(db, forget_command, dedup_key, reply_chat_id)
+        return _handle_forget_command(db, forget_command, dedup_key, reply_chat_id, delivery)
     if follow_up_reply:
-        return _handle_follow_up_reply(db, follow_up_reply, dedup_key, reply_chat_id)
+        return _handle_follow_up_reply(db, follow_up_reply, dedup_key, reply_chat_id, delivery)
     return None
 
 
@@ -62,13 +56,14 @@ def _handle_done_command(
     done_command: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     action_item = complete_action_item(db, done_command.action_item_id)
     if not action_item:
-        return send_task_not_found_response(done_command.action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(done_command.action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     try:
-        send_action_item_completed_notice(
+        delivery.send_action_item_completed_notice(
             action_item.id,
             action_item.title,
             action_item.owner_name,
@@ -95,16 +90,17 @@ def _handle_task_command(
     task_command: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     action_item = next(
         (item for item in list_action_items(db) if item.id == task_command.action_item_id),
         None,
     )
     if not action_item:
-        return send_task_not_found_response(task_command.action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(task_command.action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     try:
-        send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -126,6 +122,7 @@ def _handle_tasks_command(
     tasks_command: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     open_tasks = [
         item
@@ -134,7 +131,7 @@ def _handle_tasks_command(
     ]
 
     try:
-        send_open_tasks_summary(open_tasks[: tasks_command.limit], receive_id=reply_chat_id)
+        delivery.send_open_tasks_summary(open_tasks[: tasks_command.limit], receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -155,9 +152,10 @@ def _handle_help_command(
     db: Session,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     try:
-        send_help_card(receive_id=reply_chat_id)
+        delivery.send_help_card(receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -177,6 +175,7 @@ def _handle_remember_command(
     remember_command: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     item = remember_alias(
         db,
@@ -185,7 +184,7 @@ def _handle_remember_command(
         remember_command.memory_type,
     )
     try:
-        send_memory_saved_notice(item, receive_id=reply_chat_id)
+        delivery.send_memory_saved_notice(item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -208,10 +207,11 @@ def _handle_memory_command(
     db: Session,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     items = list_memory_aliases(db)
     try:
-        send_memory_list_summary(items, receive_id=reply_chat_id)
+        delivery.send_memory_list_summary(items, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -233,6 +233,7 @@ def _handle_forget_command(
     forget_command: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     item = forget_alias(db, forget_command.alias)
     if not item:
@@ -240,7 +241,7 @@ def _handle_forget_command(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory alias not found")
 
     try:
-        send_memory_deleted_notice(item, receive_id=reply_chat_id)
+        delivery.send_memory_deleted_notice(item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -262,10 +263,11 @@ def _handle_follow_up_reply(
     follow_up_reply: Any,
     dedup_key: str | None,
     reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     action_item = update_action_item_status(db, follow_up_reply.action_item_id, follow_up_reply.status)
     if not action_item:
-        return send_task_not_found_response(follow_up_reply.action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(follow_up_reply.action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     record_follow_up_reply(
         db,
@@ -274,7 +276,7 @@ def _handle_follow_up_reply(
         status=follow_up_reply.status,
     )
     try:
-        send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {

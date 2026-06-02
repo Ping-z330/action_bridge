@@ -7,20 +7,9 @@ from sqlalchemy.orm import Session
 from app.agent.schemas import AgentResponse
 from app.agent.service import handle_agent_message
 from app.models.pending_agent_action import PendingAgentAction
+from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
-from app.services.feishu_service import (
-    FeishuDeliveryError,
-    send_help_card,
-    send_open_tasks_summary,
-    send_pending_action_notice,
-    send_project_progress_summary,
-    send_task_create_clarification,
-    send_task_create_confirmation,
-    send_task_deadline_update_confirmation,
-    send_task_detail_summary,
-    send_task_not_found_notice,
-    send_task_owner_update_confirmation,
-)
+from app.services.feishu_service import FeishuDeliveryError
 from app.services.meeting_service import (
     create_action_item_from_agent,
     list_action_items,
@@ -101,9 +90,11 @@ def send_task_not_found_response(
     dedup_key: str | None,
     receive_id: str | None,
     db: Session,
+    delivery: FeishuDeliveryPort | None = None,
 ) -> dict[str, Any]:
+    delivery = delivery or get_default_feishu_delivery()
     try:
-        send_task_not_found_notice(action_item_id, receive_id=receive_id)
+        delivery.send_task_not_found_notice(action_item_id, receive_id=receive_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -127,7 +118,9 @@ def handle_agent_text_event(
     reply_chat_id: str | None,
     pending_chat_id: str,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort | None = None,
 ) -> dict[str, Any]:
+    delivery = delivery or get_default_feishu_delivery()
     if preparation.confirmation_action:
         return _handle_confirmation(
             db=db,
@@ -135,6 +128,7 @@ def handle_agent_text_event(
             pending_chat_id=pending_chat_id,
             reply_chat_id=reply_chat_id,
             dedup_key=dedup_key,
+            delivery=delivery,
         )
 
     if preparation.active_pending_action and preparation.pending_revision:
@@ -144,6 +138,7 @@ def handle_agent_text_event(
             pending_revision=preparation.pending_revision,
             reply_chat_id=reply_chat_id,
             dedup_key=dedup_key,
+            delivery=delivery,
         )
 
     agent_response = preparation.agent_response or _build_agent_response(db, message_text)
@@ -152,10 +147,10 @@ def handle_agent_text_event(
         return {"status": "ignored", "message": "No supported command found."}
 
     if agent_response.intent and agent_response.intent.name == "help":
-        return _send_help_response(db, agent_response, reply_chat_id, dedup_key)
+        return _send_help_response(db, agent_response, reply_chat_id, dedup_key, delivery)
 
     if agent_response.intent and agent_response.intent.name == "create_task_missing_info":
-        return _send_create_task_clarification(db, agent_response, reply_chat_id, dedup_key)
+        return _send_create_task_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
 
     if agent_response.intent and agent_response.intent.name == "create_task":
         return _request_create_task_confirmation(
@@ -164,6 +159,7 @@ def handle_agent_text_event(
             pending_chat_id=pending_chat_id,
             reply_chat_id=reply_chat_id,
             dedup_key=dedup_key,
+            delivery=delivery,
         )
 
     if agent_response.intent and agent_response.intent.name == "update_task_deadline":
@@ -173,6 +169,7 @@ def handle_agent_text_event(
             pending_chat_id=pending_chat_id,
             reply_chat_id=reply_chat_id,
             dedup_key=dedup_key,
+            delivery=delivery,
         )
 
     if agent_response.intent and agent_response.intent.name == "update_task_owner":
@@ -182,15 +179,16 @@ def handle_agent_text_event(
             pending_chat_id=pending_chat_id,
             reply_chat_id=reply_chat_id,
             dedup_key=dedup_key,
+            delivery=delivery,
         )
 
     if agent_response.intent and agent_response.intent.name == "update_task_status":
-        return _update_task_status(db, agent_response, reply_chat_id, dedup_key)
+        return _update_task_status(db, agent_response, reply_chat_id, dedup_key, delivery)
 
     if agent_response.intent and agent_response.intent.name == "summarize_project":
-        return _send_project_summary(db, agent_response, reply_chat_id, dedup_key)
+        return _send_project_summary(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    return _send_query_tasks_result(db, agent_response, reply_chat_id, dedup_key)
+    return _send_query_tasks_result(db, agent_response, reply_chat_id, dedup_key, delivery)
 
 
 def _build_agent_response(db: Session, message_text: str) -> AgentResponse:
@@ -204,12 +202,13 @@ def _handle_confirmation(
     pending_chat_id: str,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     pending = get_active_pending_action(db, pending_chat_id)
     if not pending:
         mark_feishu_event_finished(db, dedup_key, "ignored")
         try:
-            send_pending_action_notice(
+            delivery.send_pending_action_notice(
                 "ℹ️ 没有待确认操作",
                 "当前没有需要确认的操作。你可以重新发送一句创建或修改任务的话。",
                 receive_id=reply_chat_id,
@@ -221,7 +220,7 @@ def _handle_confirmation(
     if confirmation_action == "cancel":
         resolve_pending_action(db, pending, "cancelled")
         try:
-            send_pending_action_notice(
+            delivery.send_pending_action_notice(
                 "已取消",
                 "已取消这次待确认操作。",
                 receive_id=reply_chat_id,
@@ -259,6 +258,7 @@ def _handle_confirmation(
                 dedup_key,
                 reply_chat_id,
                 db,
+                delivery,
             )
         confirmed_intent = "confirm_update_task_deadline"
         success_message = "Task deadline updated after confirmation."
@@ -275,6 +275,7 @@ def _handle_confirmation(
                 dedup_key,
                 reply_chat_id,
                 db,
+                delivery,
             )
         confirmed_intent = "confirm_update_task_owner"
         success_message = "Task owner updated after confirmation."
@@ -285,7 +286,7 @@ def _handle_confirmation(
 
     resolve_pending_action(db, pending, "confirmed")
     try:
-        send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -310,18 +311,19 @@ def _handle_pending_revision(
     pending_revision: dict[str, str],
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     updated_payload = update_pending_payload(db, pending, pending_revision)
     try:
         if pending.action_type == "create_task":
-            send_task_create_confirmation(
+            delivery.send_task_create_confirmation(
                 title=updated_payload["title"],
                 owner_name=updated_payload["owner_name"],
                 deadline=updated_payload["deadline"],
                 receive_id=reply_chat_id,
             )
         elif pending.action_type == "update_task_deadline":
-            send_task_deadline_update_confirmation(
+            delivery.send_task_deadline_update_confirmation(
                 action_item_id=int(updated_payload["action_item_id"]),
                 title=updated_payload["title"],
                 old_deadline=updated_payload["old_deadline"],
@@ -329,7 +331,7 @@ def _handle_pending_revision(
                 receive_id=reply_chat_id,
             )
         elif pending.action_type == "update_task_owner":
-            send_task_owner_update_confirmation(
+            delivery.send_task_owner_update_confirmation(
                 action_item_id=int(updated_payload["action_item_id"]),
                 title=updated_payload["title"],
                 old_owner_name=updated_payload["old_owner_name"],
@@ -360,9 +362,10 @@ def _send_help_response(
     agent_response: AgentResponse,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     try:
-        send_help_card(receive_id=reply_chat_id)
+        delivery.send_help_card(receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -384,9 +387,10 @@ def _send_create_task_clarification(
     agent_response: AgentResponse,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     try:
-        send_task_create_clarification(agent_response.message, receive_id=reply_chat_id)
+        delivery.send_task_create_clarification(agent_response.message, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -409,6 +413,7 @@ def _request_create_task_confirmation(
     pending_chat_id: str,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     if not agent_response.intent:
         mark_feishu_event_finished(db, dedup_key, "failed")
@@ -422,7 +427,7 @@ def _request_create_task_confirmation(
         deadline=agent_response.intent.filters["deadline"],
     )
     try:
-        send_task_create_confirmation(
+        delivery.send_task_create_confirmation(
             title=agent_response.intent.filters["title"],
             owner_name=agent_response.intent.filters["owner_name"],
             deadline=agent_response.intent.filters["deadline"],
@@ -450,6 +455,7 @@ def _request_deadline_update_confirmation(
     pending_chat_id: str,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     if not agent_response.intent:
         mark_feishu_event_finished(db, dedup_key, "failed")
@@ -459,7 +465,7 @@ def _request_deadline_update_confirmation(
     new_deadline = agent_response.intent.filters["deadline"]
     action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
     if not action_item:
-        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     save_pending_update_task_deadline(
         db,
@@ -470,7 +476,7 @@ def _request_deadline_update_confirmation(
         new_deadline=new_deadline,
     )
     try:
-        send_task_deadline_update_confirmation(
+        delivery.send_task_deadline_update_confirmation(
             action_item_id=action_item_id,
             title=action_item.title,
             old_deadline=action_item.deadline,
@@ -501,6 +507,7 @@ def _request_owner_update_confirmation(
     pending_chat_id: str,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     if not agent_response.intent:
         mark_feishu_event_finished(db, dedup_key, "failed")
@@ -510,7 +517,7 @@ def _request_owner_update_confirmation(
     new_owner_name = agent_response.intent.filters["owner_name"]
     action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
     if not action_item:
-        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     save_pending_update_task_owner(
         db,
@@ -521,7 +528,7 @@ def _request_owner_update_confirmation(
         new_owner_name=new_owner_name,
     )
     try:
-        send_task_owner_update_confirmation(
+        delivery.send_task_owner_update_confirmation(
             action_item_id=action_item_id,
             title=action_item.title,
             old_owner_name=action_item.owner_name,
@@ -551,6 +558,7 @@ def _update_task_status(
     agent_response: AgentResponse,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     if not agent_response.intent:
         mark_feishu_event_finished(db, dedup_key, "failed")
@@ -560,10 +568,10 @@ def _update_task_status(
     target_status = agent_response.intent.filters["status"]
     action_item = update_action_item_status(db, action_item_id, target_status)
     if not action_item:
-        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db)
+        return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     try:
-        send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -589,13 +597,14 @@ def _send_project_summary(
     agent_response: AgentResponse,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     if not agent_response.progress_summary:
         mark_feishu_event_finished(db, dedup_key, "failed")
         return {"status": "ignored", "message": "No project progress summary generated."}
 
     try:
-        send_project_progress_summary(agent_response.progress_summary, receive_id=reply_chat_id)
+        delivery.send_project_progress_summary(agent_response.progress_summary, receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -619,9 +628,10 @@ def _send_query_tasks_result(
     agent_response: AgentResponse,
     reply_chat_id: str | None,
     dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     try:
-        send_open_tasks_summary(agent_response.items[:10], receive_id=reply_chat_id)
+        delivery.send_open_tasks_summary(agent_response.items[:10], receive_id=reply_chat_id)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
