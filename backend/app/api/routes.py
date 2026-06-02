@@ -5,36 +5,17 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 import app.agent.orchestrator as agent_orchestrator
-from app.agent.orchestrator import (
-    get_agent_command_type,
-    handle_agent_text_event,
-    prepare_agent_text_event,
-    send_task_not_found_response,
-)
+import app.services.feishu_command_handler as feishu_command_handler
+from app.agent.orchestrator import handle_agent_text_event
 from app.db.session import SessionLocal, get_db
 from app.schemas.action_item import ActionItemUpdate, FeishuCardCallbackResponse
 from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
 from app.schemas.task_result import ActionItemListItem
-from app.services.feishu_event_service import (
-    extract_challenge,
-    extract_done_command,
-    extract_event_dedup_key,
-    extract_follow_up_reply,
-    extract_forget_command,
-    extract_help_command,
-    extract_message_text,
-    extract_memory_command,
-    extract_meeting_command,
-    extract_remember_command,
-    extract_reply_chat_id,
-    extract_task_command,
-    extract_tasks_command,
-)
 from app.services.feishu_event_log_service import mark_feishu_event_finished, register_feishu_event
+from app.services.feishu_event_router import parse_feishu_event
 from app.services.feishu_service import (
-    FeishuDeliveryError,
     extract_card_callback_action,
     send_action_item_completed_notice,
     send_help_card,
@@ -52,7 +33,8 @@ from app.services.feishu_service import (
     send_task_not_found_notice,
     send_task_owner_update_confirmation,
 )
-from app.services.follow_up_service import record_follow_up_reply, run_follow_up_scan
+from app.services.feishu_command_handler import handle_fixed_feishu_command
+from app.services.follow_up_service import run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
     create_meeting_with_actions,
@@ -62,9 +44,7 @@ from app.services.meeting_service import (
     send_follow_up_to_feishu,
     send_meeting_to_feishu,
     update_action_item,
-    update_action_item_status,
 )
-from app.services.memory_service import forget_alias, list_memory_aliases, remember_alias
 
 router = APIRouter(prefix="/api")
 
@@ -72,7 +52,11 @@ router = APIRouter(prefix="/api")
 def _sync_agent_delivery_dependencies() -> None:
     """Keep legacy route-level monkeypatches effective while Agent flow is extracted."""
     for name in (
+        "send_action_item_completed_notice",
         "send_help_card",
+        "send_memory_deleted_notice",
+        "send_memory_list_summary",
+        "send_memory_saved_notice",
         "send_open_tasks_summary",
         "send_pending_action_notice",
         "send_project_progress_summary",
@@ -84,6 +68,7 @@ def _sync_agent_delivery_dependencies() -> None:
         "send_task_owner_update_confirmation",
     ):
         setattr(agent_orchestrator, name, globals()[name])
+        setattr(feishu_command_handler, name, globals()[name])
 
 
 def process_feishu_meeting_command(title: str, transcript: str, receive_id: str | None = None) -> None:
@@ -187,279 +172,53 @@ def handle_feishu_events(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    challenge = extract_challenge(payload)
-    if challenge:
-        return {"challenge": challenge}
-
-    reply_chat_id = extract_reply_chat_id(payload)
-    pending_chat_id = reply_chat_id or "default"
-
     try:
-        done_command = extract_done_command(payload)
-        task_command = extract_task_command(payload)
-        tasks_command = extract_tasks_command(payload)
-        help_command = extract_help_command(payload)
-        remember_command = extract_remember_command(payload)
-        memory_command = extract_memory_command(payload)
-        forget_command = extract_forget_command(payload)
-        meeting_command = extract_meeting_command(payload)
-        follow_up_reply = extract_follow_up_reply(payload)
+        event = parse_feishu_event(payload, db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    message_text = extract_message_text(payload) or ""
-    _sync_agent_delivery_dependencies()
-    has_fixed_command = any(
-        (
-            done_command,
-            task_command,
-            tasks_command,
-            help_command,
-            remember_command,
-            memory_command,
-            forget_command,
-            meeting_command,
-            follow_up_reply,
-        )
-    )
-    agent_preparation = None
-    if not has_fixed_command:
-        agent_preparation = prepare_agent_text_event(db, message_text, pending_chat_id)
-        if agent_preparation.ignored:
-            return {"status": "ignored", "message": "No supported command found."}
+    if event.challenge:
+        return {"challenge": event.challenge}
+    if event.ignored:
+        return {"status": "ignored", "message": event.ignored_message}
 
-    dedup_key = extract_event_dedup_key(payload)
-    command_type = (
-        "done"
-        if done_command
-        else "task"
-        if task_command
-        else "tasks"
-        if tasks_command
-        else "help"
-        if help_command
-        else "remember"
-        if remember_command
-        else "memory"
-        if memory_command
-        else "forget"
-        if forget_command
-        else "meeting"
-        if meeting_command
-        else "follow_up_reply"
-        if follow_up_reply
-        else get_agent_command_type(agent_preparation)
-    )
-    if not register_feishu_event(db, dedup_key, command_type):
+    _sync_agent_delivery_dependencies()
+    if not register_feishu_event(db, event.dedup_key, event.command_type):
         return {"status": "duplicated", "message": "Duplicated Feishu event ignored."}
 
-    if done_command:
-        action_item = complete_action_item(db, done_command.action_item_id)
-        if not action_item:
-            return send_task_not_found_response(done_command.action_item_id, dedup_key, reply_chat_id, db)
+    fixed_response = handle_fixed_feishu_command(
+        db,
+        done_command=event.done_command,
+        task_command=event.task_command,
+        tasks_command=event.tasks_command,
+        help_command=event.help_command,
+        remember_command=event.remember_command,
+        memory_command=event.memory_command,
+        forget_command=event.forget_command,
+        follow_up_reply=event.follow_up_reply,
+        dedup_key=event.dedup_key,
+        reply_chat_id=event.reply_chat_id,
+    )
+    if fixed_response:
+        return fixed_response
 
-        try:
-            send_action_item_completed_notice(
-                action_item.id,
-                action_item.title,
-                action_item.owner_name,
-                receive_id=reply_chat_id,
-            )
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "completed",
-                "action_item_id": action_item.id,
-                "message": f"Action item completed, but Feishu notice delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "completed",
-            "action_item_id": action_item.id,
-            "message": "Action item marked as completed.",
-        }
-
-    if task_command:
-        action_item = next(
-            (item for item in list_action_items(db) if item.id == task_command.action_item_id),
-            None,
-        )
-        if not action_item:
-            return send_task_not_found_response(task_command.action_item_id, dedup_key, reply_chat_id, db)
-
-        try:
-            send_task_detail_summary(action_item, receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "task_found",
-                "action_item_id": action_item.id,
-                "message": f"Task detail found, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "task_found",
-            "action_item_id": action_item.id,
-            "message": "Task detail sent.",
-        }
-
-    if tasks_command:
-        open_tasks = [
-            item
-            for item in list_action_items(db)
-            if item.status in {"pending", "in_progress", "failed"}
-        ]
-
-        try:
-            send_open_tasks_summary(open_tasks[: tasks_command.limit], receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "listed",
-                "task_count": len(open_tasks),
-                "message": f"Open tasks listed, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "listed",
-            "task_count": len(open_tasks),
-            "message": "Open tasks summary sent.",
-        }
-
-    if help_command:
-        try:
-            send_help_card(receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "help_sent",
-                "message": f"Help card generated, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "help_sent",
-            "message": "Help card sent.",
-        }
-
-    if remember_command:
-        item = remember_alias(
-            db,
-            remember_command.alias,
-            remember_command.target,
-            remember_command.memory_type,
-        )
-        try:
-            send_memory_saved_notice(item, receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "memory_saved",
-                "alias": item.alias,
-                "target": item.target,
-                "message": f"Memory saved, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "memory_saved",
-            "alias": item.alias,
-            "target": item.target,
-            "message": "Memory alias saved.",
-        }
-
-    if memory_command:
-        items = list_memory_aliases(db)
-        try:
-            send_memory_list_summary(items, receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "memory_listed",
-                "memory_count": len(items),
-                "message": f"Memory listed, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "memory_listed",
-            "memory_count": len(items),
-            "message": "Memory aliases listed.",
-        }
-
-    if forget_command:
-        item = forget_alias(db, forget_command.alias)
-        if not item:
-            mark_feishu_event_finished(db, dedup_key, "failed")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory alias not found")
-
-        try:
-            send_memory_deleted_notice(item, receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "memory_deleted",
-                "alias": item.alias,
-                "message": f"Memory deleted, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "memory_deleted",
-            "alias": item.alias,
-            "message": "Memory alias deleted.",
-        }
-
-    if follow_up_reply:
-        action_item = update_action_item_status(db, follow_up_reply.action_item_id, follow_up_reply.status)
-        if not action_item:
-            return send_task_not_found_response(follow_up_reply.action_item_id, dedup_key, reply_chat_id, db)
-
-        record_follow_up_reply(
-            db,
-            meeting_id=action_item.meeting_id,
-            action_item_id=action_item.id,
-            status=follow_up_reply.status,
-        )
-        try:
-            send_task_detail_summary(action_item, receive_id=reply_chat_id)
-        except FeishuDeliveryError as exc:
-            mark_feishu_event_finished(db, dedup_key, "finished")
-            return {
-                "status": "follow_up_replied",
-                "action_item_id": action_item.id,
-                "target_status": follow_up_reply.status,
-                "message": f"Follow-up reply handled, but Feishu delivery failed: {exc}",
-            }
-
-        mark_feishu_event_finished(db, dedup_key, "finished")
-        return {
-            "status": "follow_up_replied",
-            "action_item_id": action_item.id,
-            "target_status": follow_up_reply.status,
-            "message": "Follow-up reply handled.",
-        }
-
-    if not meeting_command and agent_preparation:
+    if not event.meeting_command and event.agent_preparation:
         return handle_agent_text_event(
             db=db,
-            preparation=agent_preparation,
-            message_text=message_text,
-            reply_chat_id=reply_chat_id,
-            pending_chat_id=pending_chat_id,
-            dedup_key=dedup_key,
+            preparation=event.agent_preparation,
+            message_text=event.message_text,
+            reply_chat_id=event.reply_chat_id,
+            pending_chat_id=event.pending_chat_id,
+            dedup_key=event.dedup_key,
         )
 
     background_tasks.add_task(
         process_feishu_meeting_command,
-        meeting_command.title,
-        meeting_command.transcript,
-        reply_chat_id,
+        event.meeting_command.title,
+        event.meeting_command.transcript,
+        event.reply_chat_id,
     )
-    mark_feishu_event_finished(db, dedup_key, "accepted")
+    mark_feishu_event_finished(db, event.dedup_key, "accepted")
     return {
         "status": "accepted",
         "message": "Meeting command accepted and will be processed in background.",
