@@ -117,6 +117,24 @@ def run_follow_up_scan(db: Session, run_date: date | None = None) -> FollowUpRun
     )
 
 
+def record_follow_up_reply(
+    db: Session,
+    meeting_id: int,
+    action_item_id: int,
+    status: str,
+) -> FollowUpLog:
+    log = FollowUpLog(
+        meeting_id=meeting_id,
+        action_item_id=action_item_id,
+        reminder_type="reply_status_update",
+        status=status,
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
 def _collect_candidates(db: Session, action_items: list[ActionItem], run_date: date) -> list[FollowUpCandidate]:
     candidates: list[FollowUpCandidate] = []
 
@@ -219,4 +237,3 @@ def _parse_relative_deadline(deadline: str, today: date) -> date | None:
 def _resolve_weekday(today: date, target_weekday: int, week_offset: int) -> date:
     start_of_week = today - timedelta(days=today.weekday())
     return start_of_week + timedelta(days=target_weekday + 7 * week_offset)
-

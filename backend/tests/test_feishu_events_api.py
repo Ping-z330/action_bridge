@@ -560,6 +560,83 @@ def test_feishu_events_agent_updates_task_status(client, monkeypatch) -> None:
     assert updated_item["status"] == "completed"
 
 
+def test_feishu_events_handles_follow_up_reply_and_records_log(client, monkeypatch) -> None:
+    import app.api.routes as routes
+    from app.db.session import SessionLocal
+    from app.models.follow_up_log import FollowUpLog
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Follow-up reply test",
+            "transcript": "Action: Frontend fixes mobile navigation issue.",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    sent_items = []
+
+    def fake_send(item, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_items.append(item)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_detail_summary", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"完成了 #{action_item_id}", message_id="om_follow_up_reply"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "follow_up_replied"
+    assert response.json()["action_item_id"] == action_item_id
+    assert response.json()["target_status"] == "completed"
+    assert sent_items[0].status == "completed"
+
+    detail_response = client.get(f"/api/meetings/{meeting['id']}")
+    updated_item = detail_response.json()["action_items"][0]
+    assert updated_item["status"] == "completed"
+
+    db = SessionLocal()
+    try:
+        log = db.query(FollowUpLog).filter(FollowUpLog.action_item_id == action_item_id).one()
+        assert log.reminder_type == "reply_status_update"
+        assert log.status == "completed"
+    finally:
+        db.close()
+
+
+def test_feishu_events_handles_follow_up_risk_reply(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Follow-up risk reply test",
+            "transcript": "Action: QA supplements regression cases.",
+        },
+    )
+    action_item_id = create_response.json()["action_items"][0]["id"]
+    sent_items = []
+
+    monkeypatch.setattr(
+        routes,
+        "send_task_detail_summary",
+        lambda item, receive_id=None: sent_items.append(item) or "sent",
+    )
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event(f"#{action_item_id} 有风险", message_id="om_follow_up_risk_reply"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "follow_up_replied"
+    assert response.json()["target_status"] == "failed"
+    assert sent_items[0].status == "failed"
+
+
 def test_feishu_events_agent_asks_confirmation_before_creating_task(client, monkeypatch) -> None:
     import app.api.routes as routes
 

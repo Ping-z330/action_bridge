@@ -270,7 +270,17 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
         body_elements = [
             _markdown_block("**📍 待跟进行动项**\n请优先关注以下尚未完成的任务。"),
             *_build_action_item_elements(unfinished_items),
-            _markdown_block("**💡 状态更新**\n请在 ActionBridge 后台任务结果页更新任务状态。"),
+            _markdown_block(
+                "\n".join(
+                    [
+                        "**💡 直接回复更新状态**",
+                        "`完成了 #任务ID` 标记已完成",
+                        "`#任务ID 还在进行中` 标记进行中",
+                        "`#任务ID 有风险` 标记有风险",
+                        "也可以在 ActionBridge 后台任务结果页更新。",
+                    ]
+                )
+            ),
         ]
         template = "orange"
     else:

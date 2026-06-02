@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +44,12 @@ class FeishuForgetCommand:
 @dataclass(frozen=True)
 class FeishuMemoryCommand:
     pass
+
+
+@dataclass(frozen=True)
+class FeishuFollowUpReply:
+    action_item_id: int
+    status: str
 
 
 def extract_challenge(payload: dict[str, Any]) -> str | None:
@@ -243,8 +250,48 @@ def extract_memory_command(payload: dict[str, Any]) -> FeishuMemoryCommand | Non
     return None
 
 
+def extract_follow_up_reply(payload: dict[str, Any]) -> FeishuFollowUpReply | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    action_item_id = _extract_action_item_id(text)
+    if action_item_id is None:
+        return None
+
+    target_status = _extract_reply_status(text)
+    if not target_status:
+        return None
+
+    return FeishuFollowUpReply(action_item_id=action_item_id, status=target_status)
+
+
 def extract_message_text(payload: dict[str, Any]) -> str | None:
     return _extract_text(payload)
+
+
+def _extract_action_item_id(text: str) -> int | None:
+    patterns = (
+        r"#\s*(\d+)",
+        r"(?:任务|行动项)?\s*(\d+)\s*(?:号|號)\s*(?:任务|行动项)?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _extract_reply_status(text: str) -> str | None:
+    if any(keyword in text for keyword in ("完成了", "已完成", "做完了", "搞定了", "done", "Done")):
+        return "completed"
+    if any(keyword in text for keyword in ("还在进行中", "进行中", "推进中", "处理中")):
+        return "in_progress"
+    if any(keyword in text for keyword in ("有风险", "风险", "阻塞", "blocked", "Blocked")):
+        return "failed"
+    if any(keyword in text for keyword in ("待处理", "未开始", "先不做", "待办")):
+        return "pending"
+    return None
 
 
 def _extract_text(payload: dict[str, Any]) -> str | None:

@@ -15,6 +15,7 @@ from app.services.feishu_event_service import (
     extract_challenge,
     extract_done_command,
     extract_event_dedup_key,
+    extract_follow_up_reply,
     extract_forget_command,
     extract_help_command,
     extract_message_text,
@@ -45,7 +46,7 @@ from app.services.feishu_service import (
     send_task_not_found_notice,
     send_task_owner_update_confirmation,
 )
-from app.services.follow_up_service import run_follow_up_scan
+from app.services.follow_up_service import record_follow_up_reply, run_follow_up_scan
 from app.services.meeting_service import (
     complete_action_item,
     create_action_item_from_agent,
@@ -222,6 +223,7 @@ def handle_feishu_events(
         memory_command = extract_memory_command(payload)
         forget_command = extract_forget_command(payload)
         meeting_command = extract_meeting_command(payload)
+        follow_up_reply = extract_follow_up_reply(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -236,6 +238,7 @@ def handle_feishu_events(
             memory_command,
             forget_command,
             meeting_command,
+            follow_up_reply,
         )
     )
     confirmation_action = None if has_fixed_command else detect_confirmation_message(message_text)
@@ -278,6 +281,8 @@ def handle_feishu_events(
         if forget_command
         else "meeting"
         if meeting_command
+        else "follow_up_reply"
+        if follow_up_reply
         else "confirm"
         if confirmation_action == "confirm"
         else "cancel"
@@ -447,6 +452,36 @@ def handle_feishu_events(
             "status": "memory_deleted",
             "alias": item.alias,
             "message": "Memory alias deleted.",
+        }
+
+    if follow_up_reply:
+        action_item = update_action_item_status(db, follow_up_reply.action_item_id, follow_up_reply.status)
+        if not action_item:
+            return _send_task_not_found_response(follow_up_reply.action_item_id, dedup_key, reply_chat_id, db)
+
+        record_follow_up_reply(
+            db,
+            meeting_id=action_item.meeting_id,
+            action_item_id=action_item.id,
+            status=follow_up_reply.status,
+        )
+        try:
+            send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        except FeishuDeliveryError as exc:
+            mark_feishu_event_finished(db, dedup_key, "finished")
+            return {
+                "status": "follow_up_replied",
+                "action_item_id": action_item.id,
+                "target_status": follow_up_reply.status,
+                "message": f"Follow-up reply handled, but Feishu delivery failed: {exc}",
+            }
+
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "follow_up_replied",
+            "action_item_id": action_item.id,
+            "target_status": follow_up_reply.status,
+            "message": "Follow-up reply handled.",
         }
 
     if not meeting_command:
