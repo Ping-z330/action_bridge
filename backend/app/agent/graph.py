@@ -6,6 +6,7 @@ from app.agent.confirmed_intents import build_confirmed_action_intent
 from app.agent.response_builder import build_agent_response_from_intent
 from app.agent.schemas import AgentExecutedAction, AgentIntent, AgentResponse, ProjectProgressSummary
 from app.agent.service import detect_intent_with_fallback
+from app.agent.task_reference_resolver import resolve_task_reference_intent
 from app.agent.tools import (
     execute_create_task_tool,
     execute_deadline_update_tool,
@@ -106,6 +107,16 @@ def _route_intent_node(state: AgentGraphState) -> AgentGraphState:
     }
 
 
+def _resolve_task_reference_node(state: AgentGraphState) -> AgentGraphState:
+    return {
+        "intent": resolve_task_reference_intent(
+            state.get("intent"),
+            state["normalized_message"],
+            state["action_items"],
+        ),
+    }
+
+
 def _execute_tool_node(state: AgentGraphState) -> AgentGraphState:
     intent = state.get("intent")
     if not intent:
@@ -180,6 +191,7 @@ def _run_linear_graph(state: AgentGraphState) -> AgentGraphState:
     state = {**state, **_load_memory_node(state)}
     state = {**state, **_load_task_context_node(state)}
     state = {**state, **_detect_intent_node(state)}
+    state = {**state, **_resolve_task_reference_node(state)}
     state = {**state, **_route_intent_node(state)}
     state = {**state, **_execute_tool_node(state)}
     state = {**state, **_build_response_node(state)}
@@ -194,6 +206,7 @@ def _build_agent_graph():
     workflow.add_node("load_memory", _load_memory_node)
     workflow.add_node("load_task_context", _load_task_context_node)
     workflow.add_node("detect_intent", _detect_intent_node)
+    workflow.add_node("resolve_task_reference", _resolve_task_reference_node)
     workflow.add_node("route_intent", _route_intent_node)
     workflow.add_node("execute_tool", _execute_tool_node)
     workflow.add_node("build_response", _build_response_node)
@@ -201,7 +214,8 @@ def _build_agent_graph():
     workflow.set_entry_point("load_memory")
     workflow.add_edge("load_memory", "load_task_context")
     workflow.add_edge("load_task_context", "detect_intent")
-    workflow.add_edge("detect_intent", "route_intent")
+    workflow.add_edge("detect_intent", "resolve_task_reference")
+    workflow.add_edge("resolve_task_reference", "route_intent")
     workflow.add_edge("route_intent", "execute_tool")
     workflow.add_edge("execute_tool", "build_response")
     workflow.add_edge("build_response", END)

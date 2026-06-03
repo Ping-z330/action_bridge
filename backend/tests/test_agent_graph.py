@@ -1,4 +1,5 @@
 from app.agent.confirmed_intents import build_confirmed_action_intent
+from app.agent.schemas import AgentIntent
 from app.agent.graph import run_agent_graph, run_agent_graph_state, run_confirmed_agent_action
 from app.schemas.meeting import MeetingCreate
 from app.services.meeting_service import create_meeting_with_actions
@@ -145,3 +146,74 @@ def test_agent_graph_executes_confirmed_owner_update_tool(db_session) -> None:
     assert response.executed_action.action_item_id == action_item_id
     assert response.executed_action.target_owner_name == "QA"
     assert response.executed_action.action_item.owner_name == "QA"
+
+
+def test_agent_graph_resolves_unique_task_reference_before_routing(db_session, monkeypatch) -> None:
+    import app.agent.graph as agent_graph
+
+    meeting = create_meeting_with_actions(
+        db_session,
+        MeetingCreate(
+            title="Website launch sync",
+            transcript="Action: Frontend completes login page integration.",
+        ),
+    )
+
+    def fake_detect_intent(_message: str) -> AgentIntent:
+        return AgentIntent(
+            name="clarify_task_reference",
+            filters={
+                "missing_fields": "任务编号",
+                "raw_text": "把 login page 那个任务交给 QA",
+                "target_intent": "update_task_owner",
+                "owner_name": "QA",
+            },
+        )
+
+    monkeypatch.setattr(agent_graph, "detect_intent_with_fallback", fake_detect_intent)
+
+    state = run_agent_graph_state({"db": db_session, "message": "把 login page 那个任务交给 QA"})
+
+    assert state["intent_route"] == "update_task_owner"
+    assert state["intent"].filters == {
+        "action_item_id": str(meeting.action_items[0].id),
+        "owner_name": "QA",
+    }
+    assert state["agent_response"].intent.name == "update_task_owner"
+
+
+def test_agent_graph_keeps_clarification_when_task_reference_is_ambiguous(db_session, monkeypatch) -> None:
+    import app.agent.graph as agent_graph
+
+    create_meeting_with_actions(
+        db_session,
+        MeetingCreate(
+            title="Website launch A",
+            transcript="Action: Frontend completes login page integration.",
+        ),
+    )
+    create_meeting_with_actions(
+        db_session,
+        MeetingCreate(
+            title="Website launch B",
+            transcript="Action: QA verifies login page regression.",
+        ),
+    )
+
+    def fake_detect_intent(_message: str) -> AgentIntent:
+        return AgentIntent(
+            name="clarify_task_reference",
+            filters={
+                "missing_fields": "任务编号",
+                "raw_text": "把 login page 那个任务交给 QA",
+                "target_intent": "update_task_owner",
+                "owner_name": "QA",
+            },
+        )
+
+    monkeypatch.setattr(agent_graph, "detect_intent_with_fallback", fake_detect_intent)
+
+    state = run_agent_graph_state({"db": db_session, "message": "把 login page 那个任务交给 QA"})
+
+    assert state["intent_route"] == "clarify_task_reference"
+    assert state["agent_response"].intent.name == "clarify_task_reference"

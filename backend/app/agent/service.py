@@ -132,6 +132,10 @@ def detect_intent(message: str) -> AgentIntent | None:
     if update_intent:
         return update_intent
 
+    clarification_intent = _detect_task_reference_clarification_intent(normalized)
+    if clarification_intent:
+        return clarification_intent
+
     progress_intent = _detect_progress_summary_intent(normalized)
     if progress_intent:
         return progress_intent
@@ -180,9 +184,35 @@ def detect_intent(message: str) -> AgentIntent | None:
 
 def detect_intent_with_fallback(message: str) -> AgentIntent | None:
     rule_intent = detect_intent(message)
-    if rule_intent:
+    if rule_intent and _should_use_rule_before_llm(message, rule_intent):
         return rule_intent
-    return detect_llm_intent(message)
+
+    llm_intent = detect_llm_intent(message)
+    if llm_intent:
+        return llm_intent
+
+    return rule_intent
+
+
+def _should_use_rule_before_llm(message: str, rule_intent: AgentIntent) -> bool:
+    if rule_intent.name in {"help", "create_task", "create_task_missing_info"}:
+        return True
+
+    if rule_intent.name in {"update_task_deadline", "update_task_owner", "update_task_status"}:
+        return True
+
+    if rule_intent.name == "clarify_task_reference":
+        return False
+
+    if rule_intent.name == "summarize_project":
+        return True
+
+    if rule_intent.name == "query_tasks":
+        if _looks_like_task_mutation(message):
+            return False
+        return rule_intent.filters != {"open_only": "true"}
+
+    return False
 
 
 def _detect_create_task_intent(message: str) -> AgentIntent | None:
@@ -236,6 +266,16 @@ def _detect_owner_update_intent(message: str) -> AgentIntent | None:
     if action_item_id is None:
         return None
 
+    conversational_owner = _extract_conversational_owner(message)
+    if conversational_owner:
+        return AgentIntent(
+            name="update_task_owner",
+            filters={
+                "action_item_id": str(action_item_id),
+                "owner_name": conversational_owner,
+            },
+        )
+
     patterns = (
         r"(?:负责人)?(?:改成|改为|换成|转给|交给|分配给)\s*(?P<owner>.{1,20}?)(?:负责)?$",
         r"负责人\s*(?:改成|改为|换成|设置为)\s*(?P<owner>.{1,20})$",
@@ -254,6 +294,29 @@ def _detect_owner_update_intent(message: str) -> AgentIntent | None:
                 )
 
     return None
+
+
+def _extract_conversational_owner(message: str) -> str | None:
+    patterns = (
+        r"(?:，|,|。|\s)(?P<owner>.{1,20}?)(?:来跟|来负责|负责跟进)$",
+        r"(?P<owner>.{1,20}?)(?:来跟|来负责|负责跟进)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            owner_name = _clean_task_field(match.group("owner"))
+            owner_name = _clean_conversational_owner_name(owner_name)
+            if owner_name and not _is_filter_phrase(owner_name):
+                return owner_name
+    return None
+
+
+def _clean_conversational_owner_name(owner_name: str) -> str:
+    for separator in ("，", ",", "。", "；", ";"):
+        if separator in owner_name:
+            owner_name = owner_name.rsplit(separator, 1)[-1]
+    owner_name = re.sub(r"^\s*\d+\s*(?:号)?\s*", "", owner_name)
+    return _clean_task_field(owner_name)
 
 
 def _strip_create_task_prefix(message: str) -> str:
@@ -372,7 +435,53 @@ def _detect_status_update_intent(message: str) -> AgentIntent | None:
     )
 
 
+def _detect_task_reference_clarification_intent(message: str) -> AgentIntent | None:
+    if _extract_action_item_id(message) is not None:
+        return None
+    if not _looks_like_task_mutation(message):
+        return None
+
+    return AgentIntent(
+        name="clarify_task_reference",
+        filters={
+            "missing_fields": "任务编号",
+            "raw_text": message,
+        },
+    )
+
+
+def _looks_like_task_mutation(message: str) -> bool:
+    mutation_patterns = (
+        r"改成",
+        r"改为",
+        r"修改",
+        r"调整",
+        r"换成",
+        r"换给",
+        r"转给",
+        r"交给",
+        r"负责人\s*(?:改|换|转|设)",
+        r"延期",
+        r"截止",
+        r"完成",
+        r"推进",
+        r"进行中",
+        r"有风险",
+        r"标记",
+        r"done",
+        r"blocked",
+    )
+    task_reference_keywords = ("任务", "行动项", "事项", "这个", "那个", "#")
+    return any(re.search(pattern, message, re.IGNORECASE) for pattern in mutation_patterns) and any(
+        keyword in message for keyword in task_reference_keywords
+    )
+
+
 def _extract_action_item_id(message: str) -> int | None:
+    leading_match = re.search(r"^\s*(\d+)\s*(?:号)?", message)
+    if leading_match:
+        return int(leading_match.group(1))
+
     patterns = (
         r"(?:#|任务|行动项)?\s*(\d+)\s*(?:号|號)?\s*(?:任务|行动项)?",
         r"(?:任务|行动项)\s*(?:#)?\s*(\d+)",

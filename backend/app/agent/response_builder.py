@@ -34,6 +34,13 @@ def build_agent_response_from_intent(
             message=f"Task information is incomplete: {intent.filters['missing_fields']}.",
         )
 
+    if intent.name == "clarify_task_reference":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message="我理解你想修改任务，但还缺少任务编号。请告诉我任务编号，例如：把 12 号任务负责人改成测试同学。",
+        )
+
     if intent.name == "update_task_deadline":
         return AgentResponse(
             handled=True,

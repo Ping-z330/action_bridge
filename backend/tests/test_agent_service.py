@@ -126,6 +126,15 @@ def test_detect_intent_for_update_task_owner() -> None:
     assert intent.filters["owner_name"] == "测试同学"
 
 
+def test_detect_intent_for_conversational_owner_update() -> None:
+    intent = detect_intent("12 这个事情先别给前端了，测试同学来跟")
+
+    assert intent is not None
+    assert intent.name == "update_task_owner"
+    assert intent.filters["action_item_id"] == "12"
+    assert intent.filters["owner_name"] == "测试同学"
+
+
 def test_handle_agent_message_filters_by_owner() -> None:
     items = [
         _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),
@@ -187,6 +196,41 @@ def test_detect_intent_with_fallback_uses_llm_when_rules_miss(monkeypatch) -> No
     assert intent.name == "update_task_owner"
     assert intent.filters["action_item_id"] == "12"
     assert intent.filters["owner_name"] == "测试同学"
+
+
+def test_detect_intent_asks_task_reference_for_ambiguous_update() -> None:
+    intent = detect_intent("那个任务改成测试同学负责")
+
+    assert intent is not None
+    assert intent.name == "clarify_task_reference"
+    assert intent.filters["missing_fields"] == "任务编号"
+
+
+def test_detect_intent_with_fallback_asks_reference_before_update_without_task_id() -> None:
+    intent = detect_intent_with_fallback("把官网这个任务推进一下")
+
+    assert intent is not None
+    assert intent.name == "clarify_task_reference"
+    assert intent.filters["missing_fields"] == "任务编号"
+
+
+def test_detect_intent_with_fallback_prefers_llm_for_ambiguous_rule(monkeypatch) -> None:
+    import app.agent.service as agent_service
+
+    def fake_detect_llm_intent(message: str) -> AgentIntent:
+        assert message == "把官网这个任务推进一下"
+        return AgentIntent(
+            name="query_tasks",
+            filters={"keyword": "官网", "open_only": "true"},
+        )
+
+    monkeypatch.setattr(agent_service, "detect_llm_intent", fake_detect_llm_intent)
+
+    intent = detect_intent_with_fallback("把官网这个任务推进一下")
+
+    assert intent is not None
+    assert intent.name == "query_tasks"
+    assert intent.filters["keyword"] == "官网"
 
 
 def test_handle_agent_message_ignores_unrelated_chat() -> None:

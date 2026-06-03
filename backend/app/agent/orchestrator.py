@@ -147,6 +147,9 @@ def handle_agent_text_event(
     if agent_response.intent and agent_response.intent.name == "create_task_missing_info":
         return _send_create_task_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
 
+    if agent_response.intent and agent_response.intent.name == "clarify_task_reference":
+        return _send_task_reference_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
+
     if agent_response.intent and agent_response.intent.name == "create_task":
         return _request_create_task_confirmation(
             db=db,
@@ -390,6 +393,31 @@ def _send_create_task_clarification(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_create_needs_info",
+        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "message": agent_response.message,
+    }
+
+
+def _send_task_reference_clarification(
+    db: Session,
+    agent_response: AgentResponse,
+    reply_chat_id: str | None,
+    dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
+) -> dict[str, Any]:
+    try:
+        delivery.send_task_create_clarification(agent_response.message, receive_id=reply_chat_id)
+    except FeishuDeliveryError as exc:
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "task_reference_needs_info",
+            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "message": f"{agent_response.message} Feishu delivery failed: {exc}",
+        }
+
+    mark_feishu_event_finished(db, dedup_key, "finished")
+    return {
+        "status": "task_reference_needs_info",
         "intent": agent_response.intent.name if agent_response.intent else "unknown",
         "message": agent_response.message,
     }

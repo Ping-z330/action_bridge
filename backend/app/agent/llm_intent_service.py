@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 
 SUPPORTED_INTENTS = {
     "create_task",
+    "clarify_task_reference",
     "update_task_deadline",
     "update_task_owner",
     "update_task_status",
@@ -37,7 +38,7 @@ def detect_llm_intent(message: str) -> AgentIntent | None:
     if not payload:
         return None
 
-    return _intent_from_payload(payload)
+    return _intent_from_payload(payload, source_message=message)
 
 
 def _should_use_llm() -> bool:
@@ -66,21 +67,23 @@ def _call_intent_llm(message: str) -> dict[str, Any] | None:
                 {
                     "role": "system",
                     "content": (
-                        "你是 ActionBridge 的意图识别器，只返回 JSON，不要解释。"
-                        "支持的 intent：create_task, update_task_deadline, update_task_owner, "
-                        "update_task_status, query_tasks, summarize_project, help, none。"
-                        "如果用户想修改数据库，必须抽取明确字段，不能猜。"
-                        "字段命名：action_item_id, title, owner_name, deadline, status, keyword, due_status, open_only。"
-                        "status 只能是 pending, in_progress, completed, failed。"
-                        "如果没有明确任务 ID，不要输出 update_task_*。"
+                        "You are ActionBridge's intent classifier. Return JSON only. "
+                        "Supported intent values: create_task, update_task_deadline, update_task_owner, "
+                        "update_task_status, query_tasks, summarize_project, clarify_task_reference, help, none. "
+                        "Fields: action_item_id, title, owner_name, deadline, status, keyword, due_status, "
+                        "open_only, missing_fields, raw_text. "
+                        "status must be one of pending, in_progress, completed, failed. "
+                        "Never invent action_item_id. If the user wants to update a task but does not provide "
+                        "a clear task id, return clarify_task_reference with missing_fields='任务编号'. "
+                        "For task queries, extract owner, keyword, due_status, status, and open_only when possible."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "请把用户消息转成 JSON，格式示例："
+                        "Convert this user message into JSON. Example: "
                         '{"intent":"update_task_owner","filters":{"action_item_id":"12","owner_name":"测试同学"}}'
-                        f"\n用户消息：{message}"
+                        f"\nUser message: {message}"
                     ),
                 },
             ],
@@ -101,7 +104,7 @@ def _call_intent_llm(message: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _intent_from_payload(payload: dict[str, Any]) -> AgentIntent | None:
+def _intent_from_payload(payload: dict[str, Any], source_message: str | None = None) -> AgentIntent | None:
     intent_name = str(payload.get("intent", "")).strip()
     if intent_name == "none" or intent_name not in SUPPORTED_INTENTS:
         return None
@@ -114,19 +117,73 @@ def _intent_from_payload(payload: dict[str, Any]) -> AgentIntent | None:
             return None
         return AgentIntent(name=intent_name, filters=_pick(filters, "title", "owner_name", "deadline"))
 
+    if intent_name == "clarify_task_reference":
+        return AgentIntent(
+            name=intent_name,
+            filters=filters or {"missing_fields": "任务编号", "raw_text": source_message or ""},
+        )
+
     if intent_name == "update_task_deadline":
-        if not filters.get("action_item_id") or not filters.get("deadline"):
+        if not filters.get("deadline"):
             return None
+        if not filters.get("action_item_id"):
+            return _build_task_reference_clarification(
+                source_message or "",
+                {
+                    "target_intent": "update_task_deadline",
+                    "deadline": filters["deadline"],
+                },
+            )
+        if source_message and not _message_has_explicit_task_id(source_message, filters["action_item_id"]):
+            return _build_task_reference_clarification(
+                source_message,
+                {
+                    "target_intent": "update_task_deadline",
+                    "deadline": filters["deadline"],
+                },
+            )
         return AgentIntent(name=intent_name, filters=_pick(filters, "action_item_id", "deadline"))
 
     if intent_name == "update_task_owner":
-        if not filters.get("action_item_id") or not filters.get("owner_name"):
+        if not filters.get("owner_name"):
             return None
+        if not filters.get("action_item_id"):
+            return _build_task_reference_clarification(
+                source_message or "",
+                {
+                    "target_intent": "update_task_owner",
+                    "owner_name": filters["owner_name"],
+                },
+            )
+        if source_message and not _message_has_explicit_task_id(source_message, filters["action_item_id"]):
+            return _build_task_reference_clarification(
+                source_message,
+                {
+                    "target_intent": "update_task_owner",
+                    "owner_name": filters["owner_name"],
+                },
+            )
         return AgentIntent(name=intent_name, filters=_pick(filters, "action_item_id", "owner_name"))
 
     if intent_name == "update_task_status":
-        if not filters.get("action_item_id") or filters.get("status") not in SUPPORTED_STATUSES:
+        if filters.get("status") not in SUPPORTED_STATUSES:
             return None
+        if not filters.get("action_item_id"):
+            return _build_task_reference_clarification(
+                source_message or "",
+                {
+                    "target_intent": "update_task_status",
+                    "status": filters["status"],
+                },
+            )
+        if source_message and not _message_has_explicit_task_id(source_message, filters["action_item_id"]):
+            return _build_task_reference_clarification(
+                source_message,
+                {
+                    "target_intent": "update_task_status",
+                    "status": filters["status"],
+                },
+            )
         return AgentIntent(name=intent_name, filters=_pick(filters, "action_item_id", "status"))
 
     if intent_name == "query_tasks":
@@ -146,3 +203,24 @@ def _intent_from_payload(payload: dict[str, Any]) -> AgentIntent | None:
 
 def _pick(source: dict[str, str], *keys: str) -> dict[str, str]:
     return {key: source[key] for key in keys if source.get(key)}
+
+
+def _message_has_explicit_task_id(message: str, action_item_id: str) -> bool:
+    normalized_id = action_item_id.strip()
+    if not normalized_id:
+        return False
+    return normalized_id in message or f"#{normalized_id}" in message
+
+
+def _build_task_reference_clarification(message: str, extra_filters: dict[str, str] | None = None) -> AgentIntent:
+    filters = {
+        "missing_fields": "任务编号",
+        "raw_text": message,
+    }
+    if extra_filters:
+        filters.update(extra_filters)
+
+    return AgentIntent(
+        name="clarify_task_reference",
+        filters=filters,
+    )

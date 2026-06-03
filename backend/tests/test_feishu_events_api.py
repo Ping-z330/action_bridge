@@ -1086,6 +1086,29 @@ def test_feishu_events_agent_create_task_missing_info_prompts_user(client, monke
     assert client.get("/api/action-items").json() == []
 
 
+def test_feishu_events_agent_asks_task_reference_for_ambiguous_update(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_messages = []
+
+    def fake_send(message: str, receive_id: str | None = None) -> str:
+        assert receive_id == "oc_source"
+        sent_messages.append(message)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_create_clarification", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("那个任务改成测试同学负责", message_id="om_ambiguous_update"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "task_reference_needs_info"
+    assert response.json()["intent"] == "clarify_task_reference"
+    assert "任务编号" in sent_messages[0]
+
+
 def test_feishu_events_agent_update_missing_action_item_sends_notice(client, monkeypatch) -> None:
     import app.api.routes as routes
 

@@ -17,7 +17,7 @@ def test_intent_from_payload_accepts_valid_owner_update() -> None:
     assert intent.filters == {"action_item_id": "12", "owner_name": "测试同学"}
 
 
-def test_intent_from_payload_rejects_update_without_task_id() -> None:
+def test_intent_from_payload_asks_reference_without_task_id() -> None:
     intent = _intent_from_payload(
         {
             "intent": "update_task_owner",
@@ -25,7 +25,43 @@ def test_intent_from_payload_rejects_update_without_task_id() -> None:
         }
     )
 
-    assert intent is None
+    assert intent is not None
+    assert intent.name == "clarify_task_reference"
+    assert intent.filters["missing_fields"] == "任务编号"
+
+
+def test_intent_from_payload_asks_reference_when_llm_invents_task_id() -> None:
+    intent = _intent_from_payload(
+        {
+            "intent": "update_task_owner",
+            "filters": {
+                "action_item_id": "12",
+                "owner_name": "测试同学",
+            },
+        },
+        source_message="那个任务改成测试同学负责",
+    )
+
+    assert intent is not None
+    assert intent.name == "clarify_task_reference"
+    assert intent.filters["missing_fields"] == "任务编号"
+
+
+def test_intent_from_payload_preserves_update_slots_when_task_id_is_missing() -> None:
+    intent = _intent_from_payload(
+        {
+            "intent": "update_task_owner",
+            "filters": {
+                "owner_name": "QA",
+            },
+        },
+        source_message="把 login page 那个任务交给 QA",
+    )
+
+    assert intent is not None
+    assert intent.name == "clarify_task_reference"
+    assert intent.filters["target_intent"] == "update_task_owner"
+    assert intent.filters["owner_name"] == "QA"
 
 
 def test_intent_from_payload_rejects_invalid_status() -> None:
