@@ -1,4 +1,4 @@
-from app.agent.schemas import AgentIntent, AgentResponse, ProjectProgressSummary
+from app.agent.schemas import AgentExecutedAction, AgentIntent, AgentResponse, ProjectProgressSummary
 from app.agent.tools import filter_tasks, summarize_project_progress
 from app.schemas.task_result import ActionItemListItem
 
@@ -8,6 +8,7 @@ def build_agent_response_from_intent(
     action_items: list[ActionItemListItem],
     tool_items: list[ActionItemListItem] | None = None,
     progress_summary: ProjectProgressSummary | None = None,
+    executed_action: AgentExecutedAction | None = None,
 ) -> AgentResponse:
     if not intent:
         return AgentResponse(handled=False, message="No supported agent intent found.")
@@ -52,6 +53,31 @@ def build_agent_response_from_intent(
             handled=True,
             intent=intent,
             message=_build_update_message(intent.filters),
+            executed_action=executed_action,
+        )
+
+    if intent.name == "confirm_create_task":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"Task created: {intent.filters['title']}.",
+            executed_action=executed_action,
+        )
+
+    if intent.name == "confirm_update_task_deadline":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"Task {intent.filters['action_item_id']} deadline updated.",
+            executed_action=executed_action,
+        )
+
+    if intent.name == "confirm_update_task_owner":
+        return AgentResponse(
+            handled=True,
+            intent=intent,
+            message=f"Task {intent.filters['action_item_id']} owner updated.",
+            executed_action=executed_action,
         )
 
     if intent.name == "summarize_project":

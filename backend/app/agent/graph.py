@@ -2,10 +2,18 @@ from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
+from app.agent.confirmed_intents import build_confirmed_action_intent
 from app.agent.response_builder import build_agent_response_from_intent
-from app.agent.schemas import AgentIntent, AgentResponse, ProjectProgressSummary
+from app.agent.schemas import AgentExecutedAction, AgentIntent, AgentResponse, ProjectProgressSummary
 from app.agent.service import detect_intent_with_fallback
-from app.agent.tools import filter_tasks, summarize_project_progress
+from app.agent.tools import (
+    execute_create_task_tool,
+    execute_deadline_update_tool,
+    execute_owner_update_tool,
+    execute_status_update_tool,
+    filter_tasks,
+    summarize_project_progress,
+)
 from app.schemas.task_result import ActionItemListItem
 from app.services.meeting_service import list_action_items
 from app.services.memory_service import normalize_message_with_memory
@@ -20,6 +28,8 @@ except ImportError:  # pragma: no cover - exercised when optional dependency is 
 class AgentGraphState(TypedDict, total=False):
     db: Session
     message: str
+    confirmed_action_type: str
+    pending_payload: dict[str, str]
     normalized_message: str
     action_items: list[ActionItemListItem]
     intent: AgentIntent | None
@@ -27,6 +37,7 @@ class AgentGraphState(TypedDict, total=False):
     tool_executed: bool
     tool_items: list[ActionItemListItem]
     progress_summary: ProjectProgressSummary
+    executed_action: AgentExecutedAction
     agent_response: AgentResponse
 
 
@@ -43,11 +54,25 @@ def run_agent_graph(db: Session, message: str) -> AgentResponse:
     return result["agent_response"]
 
 
+def run_confirmed_agent_action(db: Session, action_type: str, payload: dict[str, str]) -> AgentResponse:
+    initial_state: AgentGraphState = {
+        "db": db,
+        "message": "",
+        "confirmed_action_type": action_type,
+        "pending_payload": payload,
+    }
+    result = run_agent_graph_state(initial_state)
+    return result["agent_response"]
+
+
 def run_agent_graph_state(initial_state: AgentGraphState) -> AgentGraphState:
     return _AGENT_GRAPH.invoke(initial_state) if _AGENT_GRAPH else _run_linear_graph(initial_state)
 
 
 def _load_memory_node(state: AgentGraphState) -> AgentGraphState:
+    if state.get("confirmed_action_type"):
+        return {"normalized_message": state.get("message", "")}
+
     return {
         "normalized_message": normalize_message_with_memory(state["db"], state["message"]),
     }
@@ -60,6 +85,15 @@ def _load_task_context_node(state: AgentGraphState) -> AgentGraphState:
 
 
 def _detect_intent_node(state: AgentGraphState) -> AgentGraphState:
+    confirmed_intent = build_confirmed_action_intent(
+        state.get("confirmed_action_type"),
+        state.get("pending_payload"),
+    )
+    if confirmed_intent:
+        return {
+            "intent": confirmed_intent,
+        }
+
     return {
         "intent": detect_intent_with_fallback(state["normalized_message"]),
     }
@@ -92,6 +126,41 @@ def _execute_tool_node(state: AgentGraphState) -> AgentGraphState:
             ),
         }
 
+    if intent.name == "update_task_status":
+        action_item_id = int(intent.filters["action_item_id"])
+        target_status = intent.filters["status"]
+        return {
+            "tool_executed": True,
+            "executed_action": execute_status_update_tool(state["db"], action_item_id, target_status),
+        }
+
+    if intent.name == "confirm_create_task":
+        return {
+            "tool_executed": True,
+            "executed_action": execute_create_task_tool(
+                state["db"],
+                title=intent.filters["title"],
+                owner_name=intent.filters["owner_name"],
+                deadline=intent.filters["deadline"],
+            ),
+        }
+
+    if intent.name == "confirm_update_task_deadline":
+        action_item_id = int(intent.filters["action_item_id"])
+        target_deadline = intent.filters["new_deadline"]
+        return {
+            "tool_executed": True,
+            "executed_action": execute_deadline_update_tool(state["db"], action_item_id, target_deadline),
+        }
+
+    if intent.name == "confirm_update_task_owner":
+        action_item_id = int(intent.filters["action_item_id"])
+        target_owner_name = intent.filters["new_owner_name"]
+        return {
+            "tool_executed": True,
+            "executed_action": execute_owner_update_tool(state["db"], action_item_id, target_owner_name),
+        }
+
     return {"tool_executed": False}
 
 
@@ -102,6 +171,7 @@ def _build_response_node(state: AgentGraphState) -> AgentGraphState:
             state["action_items"],
             tool_items=state.get("tool_items"),
             progress_summary=state.get("progress_summary"),
+            executed_action=state.get("executed_action"),
         ),
     }
 

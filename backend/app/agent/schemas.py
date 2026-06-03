@@ -25,9 +25,22 @@ class AgentIntent:
 
 
 @dataclass(frozen=True)
+class AgentExecutedAction:
+    action_type: str
+    status: str
+    action_item_id: int | None = None
+    target_title: str | None = None
+    target_status: str | None = None
+    target_deadline: str | None = None
+    target_owner_name: str | None = None
+    action_item: ActionItemListItem | None = None
+
+
+@dataclass(frozen=True)
 class AgentResponse:
     handled: bool
     intent: AgentIntent | None = None
     message: str = ""
     items: list[ActionItemListItem] = field(default_factory=list)
     progress_summary: ProjectProgressSummary | None = None
+    executed_action: AgentExecutedAction | None = None

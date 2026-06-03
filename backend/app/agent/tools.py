@@ -1,5 +1,13 @@
-from app.agent.schemas import ProjectProgressSummary
+from sqlalchemy.orm import Session
+
+from app.agent.schemas import AgentExecutedAction, ProjectProgressSummary
 from app.schemas.task_result import ActionItemListItem
+from app.services.meeting_service import (
+    create_action_item_from_agent,
+    update_action_item_deadline,
+    update_action_item_owner,
+    update_action_item_status,
+)
 
 
 OPEN_STATUSES = {"pending", "in_progress", "failed"}
@@ -65,6 +73,74 @@ def summarize_project_progress(items: list[ActionItemListItem], keyword: str) ->
             due_today_count=due_today_count,
         ),
         items=matched_items,
+    )
+
+
+def execute_status_update_tool(
+    db: Session,
+    action_item_id: int,
+    target_status: str,
+) -> AgentExecutedAction:
+    action_item = update_action_item_status(db, action_item_id, target_status)
+    return AgentExecutedAction(
+        action_type="update_task_status",
+        status="updated" if action_item else "not_found",
+        action_item_id=action_item_id,
+        target_status=target_status,
+        action_item=action_item,
+    )
+
+
+def execute_create_task_tool(
+    db: Session,
+    title: str,
+    owner_name: str,
+    deadline: str,
+) -> AgentExecutedAction:
+    action_item = create_action_item_from_agent(
+        db,
+        title=title,
+        owner_name=owner_name,
+        deadline=deadline,
+    )
+    return AgentExecutedAction(
+        action_type="create_task",
+        status="created",
+        action_item_id=action_item.id,
+        target_title=title,
+        target_deadline=deadline,
+        target_owner_name=owner_name,
+        action_item=action_item,
+    )
+
+
+def execute_deadline_update_tool(
+    db: Session,
+    action_item_id: int,
+    target_deadline: str,
+) -> AgentExecutedAction:
+    action_item = update_action_item_deadline(db, action_item_id, target_deadline)
+    return AgentExecutedAction(
+        action_type="update_task_deadline",
+        status="updated" if action_item else "not_found",
+        action_item_id=action_item_id,
+        target_deadline=target_deadline,
+        action_item=action_item,
+    )
+
+
+def execute_owner_update_tool(
+    db: Session,
+    action_item_id: int,
+    target_owner_name: str,
+) -> AgentExecutedAction:
+    action_item = update_action_item_owner(db, action_item_id, target_owner_name)
+    return AgentExecutedAction(
+        action_type="update_task_owner",
+        status="updated" if action_item else "not_found",
+        action_item_id=action_item_id,
+        target_owner_name=target_owner_name,
+        action_item=action_item,
     )
 
 

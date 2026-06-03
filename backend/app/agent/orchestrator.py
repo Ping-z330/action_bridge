@@ -4,17 +4,14 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.agent.graph import run_agent_graph
+from app.agent.graph import run_agent_graph, run_confirmed_agent_action
 from app.agent.schemas import AgentResponse
 from app.models.pending_agent_action import PendingAgentAction
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
 from app.services.feishu_service import FeishuDeliveryError
 from app.services.meeting_service import (
-    create_action_item_from_agent,
     list_action_items,
-    update_action_item_deadline,
-    update_action_item_owner,
     update_action_item_status,
 )
 from app.services.pending_agent_action_service import (
@@ -234,20 +231,17 @@ def _handle_confirmation(
 
     payload_data = load_pending_payload(pending)
     if pending.action_type == "create_task":
-        action_item = create_action_item_from_agent(
-            db,
-            title=payload_data["title"],
-            owner_name=payload_data["owner_name"],
-            deadline=payload_data["deadline"],
-        )
-        confirmed_intent = "confirm_create_task"
+        confirmed_response = run_confirmed_agent_action(db, pending.action_type, payload_data)
+        action_item = confirmed_response.executed_action.action_item if confirmed_response.executed_action else None
+        if not action_item:
+            resolve_pending_action(db, pending, "failed")
+            mark_feishu_event_finished(db, dedup_key, "failed")
+            return {"status": "failed", "message": "Task creation failed."}
+        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_create_task"
         success_message = "Task created after confirmation."
     elif pending.action_type == "update_task_deadline":
-        action_item = update_action_item_deadline(
-            db,
-            action_item_id=int(payload_data["action_item_id"]),
-            deadline=payload_data["new_deadline"],
-        )
+        confirmed_response = run_confirmed_agent_action(db, pending.action_type, payload_data)
+        action_item = confirmed_response.executed_action.action_item if confirmed_response.executed_action else None
         if not action_item:
             resolve_pending_action(db, pending, "failed")
             return send_task_not_found_response(
@@ -257,14 +251,11 @@ def _handle_confirmation(
                 db,
                 delivery,
             )
-        confirmed_intent = "confirm_update_task_deadline"
+        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_update_task_deadline"
         success_message = "Task deadline updated after confirmation."
     elif pending.action_type == "update_task_owner":
-        action_item = update_action_item_owner(
-            db,
-            action_item_id=int(payload_data["action_item_id"]),
-            owner_name=payload_data["new_owner_name"],
-        )
+        confirmed_response = run_confirmed_agent_action(db, pending.action_type, payload_data)
+        action_item = confirmed_response.executed_action.action_item if confirmed_response.executed_action else None
         if not action_item:
             resolve_pending_action(db, pending, "failed")
             return send_task_not_found_response(
@@ -274,7 +265,7 @@ def _handle_confirmation(
                 db,
                 delivery,
             )
-        confirmed_intent = "confirm_update_task_owner"
+        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_update_task_owner"
         success_message = "Task owner updated after confirmation."
     else:
         resolve_pending_action(db, pending, "failed")
@@ -563,7 +554,11 @@ def _update_task_status(
 
     action_item_id = int(agent_response.intent.filters["action_item_id"])
     target_status = agent_response.intent.filters["status"]
-    action_item = update_action_item_status(db, action_item_id, target_status)
+    if agent_response.executed_action:
+        action_item = agent_response.executed_action.action_item
+    else:
+        action_item = update_action_item_status(db, action_item_id, target_status)
+
     if not action_item:
         return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
 
