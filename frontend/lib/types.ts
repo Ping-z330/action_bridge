@@ -54,3 +54,28 @@ export type FollowUpRunResponse = {
   total_sent: number;
   results: FollowUpRunItem[];
 };
+
+export type AgentTraceLogItem = {
+  id: number;
+  chat_id: string;
+  source: string;
+  message: string;
+  normalized_message: string;
+  intent_name: string;
+  intent_filters: Record<string, unknown>;
+  tool_name: string;
+  tool_source: string;
+  tool_category: string;
+  tool_executed: boolean;
+  dangerous: boolean;
+  requires_confirmation: boolean;
+  response_message: string;
+  created_at: string;
+};
+
+export type AgentDebugRunResponse = {
+  handled: boolean;
+  intent_name: string;
+  message: string;
+  trace_id: number | null;
+};

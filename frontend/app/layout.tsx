@@ -4,6 +4,7 @@ import "../styles/workspace.css";
 import "../styles/detail.css";
 import "../styles/history.css";
 import "../styles/tasks.css";
+import "../styles/debug.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {

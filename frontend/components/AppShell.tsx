@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 
-type NavKey = "meetings" | "tasks" | "history";
+type NavKey = "meetings" | "tasks" | "history" | "agent-debug";
 
 const NAV_ITEMS = [
   { key: "meetings", label: "会议处理", href: "/" },
   { key: "tasks", label: "任务结果", href: "/tasks" },
   { key: "history", label: "历史记录", href: "/history" },
+  { key: "agent-debug", label: "Agent 调试", href: "/agent-debug" },
 ] satisfies Array<{ key: NavKey; label: string; href: string }>;
 
 export function AppShell({ active, children }: { active: NavKey; children: ReactNode }) {

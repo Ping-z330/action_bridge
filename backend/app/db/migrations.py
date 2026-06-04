@@ -78,6 +78,32 @@ def run_lightweight_migrations() -> None:
             connection.execute(text("CREATE INDEX ix_agent_task_contexts_id ON agent_task_contexts (id)"))
             connection.execute(text("CREATE UNIQUE INDEX ix_agent_task_contexts_chat_id ON agent_task_contexts (chat_id)"))
 
+        if "agent_trace_logs" not in table_names:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE agent_trace_logs (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        chat_id VARCHAR(128) DEFAULT '' NOT NULL,
+                        source VARCHAR(32) DEFAULT 'agent' NOT NULL,
+                        message TEXT DEFAULT '' NOT NULL,
+                        normalized_message TEXT DEFAULT '' NOT NULL,
+                        intent_name VARCHAR(64) DEFAULT 'unhandled' NOT NULL,
+                        intent_filters_json TEXT DEFAULT '{}' NOT NULL,
+                        tool_name VARCHAR(64) DEFAULT '' NOT NULL,
+                        tool_source VARCHAR(32) DEFAULT '' NOT NULL,
+                        tool_category VARCHAR(64) DEFAULT '' NOT NULL,
+                        tool_executed BOOLEAN DEFAULT 0 NOT NULL,
+                        dangerous BOOLEAN DEFAULT 0 NOT NULL,
+                        requires_confirmation BOOLEAN DEFAULT 0 NOT NULL,
+                        response_message TEXT DEFAULT '' NOT NULL,
+                        created_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX ix_agent_trace_logs_id ON agent_trace_logs (id)"))
+
     if "action_items" not in table_names:
         return
 

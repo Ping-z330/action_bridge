@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.db.session import SessionLocal
 from app.main import app
 from app.models.action_item import ActionItem
+from app.models.agent_trace_log import AgentTraceLog
 from app.models.agent_task_context import AgentTaskContext
 from app.models.feishu_event_log import FeishuEventLog
 from app.models.follow_up_log import FollowUpLog
@@ -32,6 +33,7 @@ def clean_database() -> Generator[None, None, None]:
     try:
         db.query(FollowUpLog).delete()
         db.query(FeishuEventLog).delete()
+        db.query(AgentTraceLog).delete()
         db.query(PendingAgentAction).delete()
         db.query(MemoryAlias).delete()
         db.query(AgentTaskContext).delete()
@@ -43,6 +45,7 @@ def clean_database() -> Generator[None, None, None]:
     finally:
         db.query(FollowUpLog).delete()
         db.query(FeishuEventLog).delete()
+        db.query(AgentTraceLog).delete()
         db.query(PendingAgentAction).delete()
         db.query(MemoryAlias).delete()
         db.query(AgentTaskContext).delete()

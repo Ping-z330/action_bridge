@@ -4,9 +4,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.agent.graph import run_agent_graph
 from app.agent.orchestrator import handle_agent_text_event
 from app.db.session import SessionLocal, get_db
 from app.schemas.action_item import ActionItemUpdate, FeishuCardCallbackResponse
+from app.schemas.agent_trace import AgentDebugRunRequest, AgentDebugRunResponse, AgentTraceLogItem
 from app.schemas.follow_up import FollowUpRunResponse
 from app.schemas.meeting import MeetingCreate, MeetingListItem, MeetingResponse
 from app.schemas.task import FeishuSendResponse
@@ -34,6 +36,7 @@ from app.services.feishu_service import (
 from app.services.feishu_command_handler import handle_fixed_feishu_command
 from app.services.feishu_delivery import FeishuDeliveryPort
 from app.services.follow_up_service import run_follow_up_scan
+from app.services.agent_trace_service import get_latest_agent_trace_log, list_agent_trace_logs, parse_trace_filters
 from app.services.meeting_service import (
     complete_action_item,
     create_meeting_with_actions,
@@ -125,6 +128,48 @@ def send_follow_up(meeting_id: int, db: Session = Depends(get_db)) -> FeishuSend
 @router.post("/follow-ups/run", response_model=FollowUpRunResponse)
 def run_follow_ups(db: Session = Depends(get_db)) -> FollowUpRunResponse:
     return run_follow_up_scan(db)
+
+
+@router.get("/agent/traces", response_model=list[AgentTraceLogItem])
+def get_agent_traces(limit: int = 50, db: Session = Depends(get_db)) -> list[AgentTraceLogItem]:
+    return [
+        AgentTraceLogItem(
+            id=trace.id,
+            chat_id=trace.chat_id,
+            source=trace.source,
+            message=trace.message,
+            normalized_message=trace.normalized_message,
+            intent_name=trace.intent_name,
+            intent_filters=parse_trace_filters(trace.intent_filters_json),
+            tool_name=trace.tool_name,
+            tool_source=trace.tool_source,
+            tool_category=trace.tool_category,
+            tool_executed=trace.tool_executed,
+            dangerous=trace.dangerous,
+            requires_confirmation=trace.requires_confirmation,
+            response_message=trace.response_message,
+            created_at=trace.created_at,
+        )
+        for trace in list_agent_trace_logs(db, limit=limit)
+    ]
+
+
+@router.post("/agent/debug-run", response_model=AgentDebugRunResponse)
+def run_agent_debug(payload: AgentDebugRunRequest, db: Session = Depends(get_db)) -> AgentDebugRunResponse:
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is required")
+
+    chat_id = payload.chat_id.strip() or "debug-web"
+    agent_response = run_agent_graph(db, message, chat_id=chat_id)
+    trace = get_latest_agent_trace_log(db, chat_id=chat_id)
+
+    return AgentDebugRunResponse(
+        handled=agent_response.handled,
+        intent_name=agent_response.intent.name if agent_response.intent else "unhandled",
+        message=agent_response.message,
+        trace_id=trace.id if trace else None,
+    )
 
 
 @router.patch("/action-items/{action_item_id}", response_model=MeetingResponse)

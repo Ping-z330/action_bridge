@@ -19,6 +19,7 @@ from app.agent.tool_registry import (
 from app.schemas.task_result import ActionItemListItem
 from app.services.meeting_service import list_action_items
 from app.services.agent_task_context_service import load_recent_task_ids
+from app.services.agent_trace_service import create_agent_trace_log
 from app.services.memory_service import normalize_message_with_memory
 
 try:
@@ -204,14 +205,24 @@ def _execute_tool_node(state: AgentGraphState) -> AgentGraphState:
 
 
 def _build_response_node(state: AgentGraphState) -> AgentGraphState:
+    agent_response = build_agent_response_from_intent(
+        state.get("intent"),
+        state["action_items"],
+        tool_items=state.get("tool_items"),
+        progress_summary=state.get("progress_summary"),
+        executed_action=state.get("executed_action"),
+    )
+    create_agent_trace_log(
+        state["db"],
+        message=state.get("message", ""),
+        chat_id=state.get("chat_id", ""),
+        normalized_message=state.get("normalized_message", ""),
+        intent=state.get("intent"),
+        tool_executed=state.get("tool_executed", False),
+        response=agent_response,
+    )
     return {
-        "agent_response": build_agent_response_from_intent(
-            state.get("intent"),
-            state["action_items"],
-            tool_items=state.get("tool_items"),
-            progress_summary=state.get("progress_summary"),
-            executed_action=state.get("executed_action"),
-        ),
+        "agent_response": agent_response,
     }
 
 
