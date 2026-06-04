@@ -132,6 +132,10 @@ def detect_intent(message: str) -> AgentIntent | None:
     if update_intent:
         return update_intent
 
+    query_intent = _detect_query_tasks_intent(normalized)
+    if query_intent:
+        return query_intent
+
     clarification_intent = _detect_task_reference_clarification_intent(normalized)
     if clarification_intent:
         return clarification_intent
@@ -143,7 +147,7 @@ def detect_intent(message: str) -> AgentIntent | None:
     filters: dict[str, str] = {}
     lowered = normalized.lower()
 
-    if any(keyword in normalized for keyword in ("今天", "今日", "本日")):
+    if any(keyword in normalized for keyword in ("今天", "今日", "本日")) and _has_task_query_context(normalized):
         filters["due_status"] = "due_today"
         filters["open_only"] = "true"
 
@@ -180,6 +184,51 @@ def detect_intent(message: str) -> AgentIntent | None:
         return AgentIntent(name="query_tasks", filters={"open_only": "true"})
 
     return None
+
+
+def _detect_query_tasks_intent(message: str) -> AgentIntent | None:
+    filters: dict[str, str] = {}
+    has_query_word = any(keyword in message for keyword in TASK_QUERY_KEYWORDS) or any(
+        keyword in message for keyword in ("查询", "查看", "看看", "有哪些", "列出", "显示")
+    )
+    has_task_word = any(keyword in message for keyword in ("任务", "行动项", "事项"))
+
+    if any(keyword in message for keyword in ("已完成", "已经完成", "完成的任务", "做完的任务")):
+        filters["status"] = "completed"
+
+    if "进行中" in message:
+        filters["status"] = "in_progress"
+
+    if "待处理" in message:
+        filters["status"] = "pending"
+
+    if any(keyword in message for keyword in ("有风险", "风险")):
+        filters["status"] = "failed"
+
+    if any(keyword in message for keyword in ("今天", "今日", "本日")):
+        filters["due_status"] = "due_today"
+        if filters.get("status") != "completed":
+            filters["open_only"] = "true"
+
+    if any(keyword in message for keyword in ("逾期", "过期", "超期")):
+        filters["due_status"] = "overdue"
+        if filters.get("status") != "completed":
+            filters["open_only"] = "true"
+
+    if any(keyword in message for keyword in ("未完成", "没完成", "还没做", "待办")):
+        filters["open_only"] = "true"
+
+    if filters and (has_query_word or has_task_word):
+        return AgentIntent(name="query_tasks", filters=filters)
+
+    return None
+
+
+def _has_task_query_context(message: str) -> bool:
+    return any(keyword in message for keyword in TASK_QUERY_KEYWORDS) or any(
+        keyword in message
+        for keyword in ("查询", "查看", "看看", "有哪些", "列出", "显示", "任务", "行动项", "事项", "到期")
+    )
 
 
 def detect_intent_with_fallback(message: str) -> AgentIntent | None:
@@ -261,6 +310,9 @@ def _detect_deadline_update_intent(message: str) -> AgentIntent | None:
     return None
 
 
+
+
+
 def _detect_owner_update_intent(message: str) -> AgentIntent | None:
     action_item_id = _extract_action_item_id(message)
     if action_item_id is None:
@@ -277,8 +329,8 @@ def _detect_owner_update_intent(message: str) -> AgentIntent | None:
         )
 
     patterns = (
-        r"(?:负责人)?(?:改成|改为|换成|转给|交给|分配给)\s*(?P<owner>.{1,20}?)(?:负责)?$",
-        r"负责人\s*(?:改成|改为|换成|设置为)\s*(?P<owner>.{1,20})$",
+        r"(?:\u8d1f\u8d23\u4eba)?\s*(?:\u6539\u6210|\u6539\u4e3a|\u6362\u6210|\u8f6c\u7ed9|\u4ea4\u7ed9|\u5206\u914d\u7ed9|\u8bbe\u7f6e\u4e3a)\s*(?P<owner>.{1,20}?)(?:\u8d1f\u8d23)?$",
+        r"\u8d1f\u8d23\u4eba\s*(?:\u6539\u6210|\u6539\u4e3a|\u6362\u6210|\u8bbe\u7f6e\u4e3a)\s*(?P<owner>.{1,20})$",
     )
     for pattern in patterns:
         match = re.search(pattern, message)
@@ -298,8 +350,8 @@ def _detect_owner_update_intent(message: str) -> AgentIntent | None:
 
 def _extract_conversational_owner(message: str) -> str | None:
     patterns = (
-        r"(?:，|,|。|\s)(?P<owner>.{1,20}?)(?:来跟|来负责|负责跟进)$",
-        r"(?P<owner>.{1,20}?)(?:来跟|来负责|负责跟进)$",
+        r"(?:\uff0c|,|\u3002|\s)(?P<owner>.{1,20}?)(?:\u6765\u8ddf|\u6765\u8d1f\u8d23|\u8d1f\u8d23\u8ddf\u8fdb)$",
+        r"(?P<owner>.{1,20}?)(?:\u6765\u8ddf|\u6765\u8d1f\u8d23|\u8d1f\u8d23\u8ddf\u8fdb)$",
     )
     for pattern in patterns:
         match = re.search(pattern, message)
@@ -309,7 +361,6 @@ def _extract_conversational_owner(message: str) -> str | None:
             if owner_name and not _is_filter_phrase(owner_name):
                 return owner_name
     return None
-
 
 def _clean_conversational_owner_name(owner_name: str) -> str:
     for separator in ("，", ",", "。", "；", ";"):
@@ -477,21 +528,21 @@ def _looks_like_task_mutation(message: str) -> bool:
     )
 
 
-def _extract_action_item_id(message: str) -> int | None:
-    leading_match = re.search(r"^\s*(\d+)\s*(?:号)?", message)
-    if leading_match:
-        return int(leading_match.group(1))
 
+
+
+def _extract_action_item_id(message: str) -> int | None:
     patterns = (
-        r"(?:#|任务|行动项)?\s*(\d+)\s*(?:号|號)?\s*(?:任务|行动项)?",
-        r"(?:任务|行动项)\s*(?:#)?\s*(\d+)",
+        r"^\s*(\d+)\s*(?:\u53f7|\u9879)?",
+        r"(?:\u628a|\u5c06)?\s*#\s*(\d+)",
+        r"(?:\u628a|\u5c06)?\s*(\d+)\s*(?:\u53f7|\u9879)?\s*(?:\u4efb\u52a1|\u884c\u52a8\u9879|\u4e8b\u9879)",
+        r"(?:\u4efb\u52a1|\u884c\u52a8\u9879|\u4e8b\u9879)\s*(?:#)?\s*(\d+)",
     )
     for pattern in patterns:
         match = re.search(pattern, message)
         if match:
             return int(match.group(1))
     return None
-
 
 def _extract_target_status(message: str) -> str | None:
     if any(keyword in message for keyword in ("已完成", "完成", "做完", "搞定", "done", "Done")):

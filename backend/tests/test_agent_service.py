@@ -38,6 +38,40 @@ def test_detect_intent_for_due_today_tasks() -> None:
     assert intent.filters["open_only"] == "true"
 
 
+def test_detect_intent_does_not_treat_non_task_today_question_as_due_query() -> None:
+    assert detect_intent("今天适合喝咖啡吗？") is None
+
+
+def test_detect_intent_for_completed_task_query() -> None:
+    intent = detect_intent("查询已经完成的任务")
+
+    assert intent is not None
+    assert intent.name == "query_tasks"
+    assert intent.filters == {"status": "completed"}
+
+
+def test_detect_intent_for_status_task_queries() -> None:
+    in_progress_intent = detect_intent("查看进行中任务")
+    failed_intent = detect_intent("有哪些有风险任务")
+
+    assert in_progress_intent is not None
+    assert in_progress_intent.name == "query_tasks"
+    assert in_progress_intent.filters == {"status": "in_progress"}
+    assert failed_intent is not None
+    assert failed_intent.name == "query_tasks"
+    assert failed_intent.filters == {"status": "failed"}
+
+
+def test_detect_intent_for_owner_update_with_clean_chinese_task_number() -> None:
+    message = "\u628a 2 \u53f7\u4efb\u52a1\u8d1f\u8d23\u4eba\u6539\u6210\u6d4b\u8bd5\u540c\u5b66"
+    intent = detect_intent(message)
+
+    assert intent is not None
+    assert intent.name == "update_task_owner"
+    assert intent.filters["action_item_id"] == "2"
+    assert intent.filters["owner_name"] == "\u6d4b\u8bd5\u540c\u5b66"
+
+
 def test_detect_intent_for_completed_task_update() -> None:
     intent = detect_intent("把 12 号任务标记完成")
 

@@ -8,6 +8,7 @@ from app.agent.orchestrator import (
     get_agent_command_type,
     prepare_agent_text_event,
 )
+from app.services.feishu_event_guard import gate_agent_message
 from app.services.feishu_event_service import (
     extract_challenge,
     extract_done_command,
@@ -23,6 +24,7 @@ from app.services.feishu_event_service import (
     extract_task_command,
     extract_tasks_command,
 )
+from app.services.pending_agent_action_service import detect_confirmation_message, get_active_pending_action
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,24 @@ def parse_feishu_event(payload: dict[str, Any], db: Session) -> FeishuEventConte
             follow_up_reply,
         )
     )
+    active_pending_action = get_active_pending_action(db, pending_chat_id)
+    gate = gate_agent_message(
+        payload,
+        message_text,
+        has_fixed_command=has_any_command,
+        has_active_pending_action=active_pending_action is not None,
+        is_confirmation_message=detect_confirmation_message(message_text) is not None,
+    )
+    if not gate.should_process:
+        return FeishuEventContext(
+            reply_chat_id=reply_chat_id,
+            pending_chat_id=pending_chat_id,
+            message_text=gate.message_text,
+            ignored=True,
+            ignored_message=gate.reason,
+        )
+    message_text = gate.message_text
+
     if not has_any_command:
         agent_preparation = prepare_agent_text_event(db, message_text, pending_chat_id)
         if agent_preparation.ignored:

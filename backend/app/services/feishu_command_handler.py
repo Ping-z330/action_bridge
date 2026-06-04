@@ -7,6 +7,7 @@ from app.agent.orchestrator import send_task_not_found_response
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
 from app.services.feishu_service import FeishuDeliveryError
+from app.services.agent_task_context_service import save_recent_task_context
 from app.services.follow_up_service import record_follow_up_reply
 from app.services.meeting_service import (
     complete_action_item,
@@ -129,6 +130,7 @@ def _handle_tasks_command(
         for item in list_action_items(db)
         if item.status in {"pending", "in_progress", "failed"}
     ]
+    save_recent_task_context(db, reply_chat_id or "default", open_tasks[: tasks_command.limit])
 
     try:
         delivery.send_open_tasks_summary(open_tasks[: tasks_command.limit], receive_id=reply_chat_id)

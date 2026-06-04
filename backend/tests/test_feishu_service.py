@@ -11,6 +11,7 @@ from app.services.feishu_service import (
     _build_memory_saved_payload,
     _build_open_tasks_payload,
     _build_project_progress_payload,
+    _build_task_owner_update_confirmation_payload,
     _build_task_detail_payload,
     _post_app_bot_card,
     extract_card_callback_action,
@@ -73,16 +74,18 @@ def test_build_meeting_card_payload_uses_interactive_card() -> None:
 
     assert payload["msg_type"] == "interactive"
     assert payload["card"]["schema"] == "2.0"
-    assert payload["card"]["header"]["title"]["content"] == "📌 会议纪要 | 每周项目同步会"
+    assert payload["card"]["header"]["title"]["content"] == "📢 每周项目同步会"
 
     elements = payload["card"]["body"]["elements"]
-    assert elements[0]["content"].startswith("**📝 会议摘要**")
-    assert elements[2]["content"] == "**📍 行动项**"
-    assert elements[3]["content"] == "**前端更新落地页文案**"
-    assert elements[4]["content"] == "👤 负责人：前端同学"
-    assert elements[5]["content"] == "⏰ **截止日期：周三**"
-    assert elements[6]["content"].startswith("📊 到期风险：")
-    assert elements[7]["content"] == "📌 状态：进行中"
+    text_blocks = [element["content"] for element in elements if element["tag"] == "markdown"]
+    combined = "\n".join(text_blocks)
+    assert len(text_blocks) == 4
+    assert "**当前状态**" in combined
+    assert "**✅ 已确认决策**" in combined
+    assert "1. Beta 版本延期到周五" in combined
+    assert "**📋 待办事项**" in combined
+    assert "负责人：前端同学，任务：前端更新落地页文案，截止时间：周三" in combined
+    assert "当前仍有 1 个行动项待跟进" in combined
 
 
 def test_build_meeting_card_payload_keeps_status_updates_in_backend() -> None:
@@ -92,7 +95,7 @@ def test_build_meeting_card_payload_keeps_status_updates_in_backend() -> None:
     text_blocks = [element["content"] for element in elements if element["tag"] == "markdown"]
 
     assert buttons == []
-    assert any("ActionBridge 后台任务结果页" in content for content in text_blocks)
+    assert any("请各负责人及时同步完成状态" in content for content in text_blocks)
 
 
 def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
@@ -102,8 +105,12 @@ def test_build_follow_up_card_payload_only_contains_unfinished_items() -> None:
     combined = "\n".join(text_blocks)
 
     assert payload["msg_type"] == "interactive"
+    assert len(text_blocks) == 3
+    assert "待跟进行动项：1 项" in combined
+    assert "**📋 跟进清单**" in combined
     assert "前端更新落地页文案" in combined
     assert "测试补充回归用例" not in combined
+    assert "/done 任务ID" in combined
 
 
 def test_build_open_tasks_payload_highlights_risk_and_done_command() -> None:
@@ -121,11 +128,26 @@ def test_build_open_tasks_payload_highlights_risk_and_done_command() -> None:
     contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
     combined = "\n".join(contents)
     assert "当前未完成任务：2 项" in combined
-    assert "已逾期：1 项" in combined
-    assert "今日到期：1 项" in combined
+    assert "已逾期：1" in combined
+    assert "今日到期：1" in combined
+    assert "**📋 任务清单**" in combined
     assert "🚨 #12 前端修复移动端导航栏错位问题" in combined
-    assert "操作：`/done 12`" in combined
+    assert "/done 任务ID" in combined
+    assert "/task 任务ID" in combined
     assert "#14" not in combined
+
+
+def test_build_open_tasks_payload_can_show_completed_query_results() -> None:
+    payload = _build_open_tasks_payload([build_task_item(14, "completed", "completed", "已完成")])
+
+    assert payload["card"]["header"]["title"]["content"] == "📋 任务查询结果"
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "查询结果：1 项" in combined
+    assert "#14" in combined
+    assert "状态：已完成" in combined
+    assert "/task 任务ID" in combined
+    assert "/done 任务ID" not in combined
 
 
 def test_build_task_detail_payload_contains_done_command() -> None:
@@ -141,6 +163,23 @@ def test_build_task_detail_payload_contains_done_command() -> None:
     assert "来源会议" in combined
     assert "`/done 12`" in combined
     assert "`/tasks`" in combined
+
+
+def test_build_task_owner_update_confirmation_payload_uses_clean_chinese_labels() -> None:
+    payload = _build_task_owner_update_confirmation_payload(
+        action_item_id=2,
+        title="\u5b8c\u6210\u5b98\u7f51\u6838\u5fc3\u8def\u5f84\u56de\u5f52\u6d4b\u8bd5",
+        old_owner_name="\u524d\u7aef\u540c\u5b66",
+        new_owner_name="\u6d4b\u8bd5\u540c\u5b66",
+    )
+
+    assert payload["card"]["header"]["title"]["content"] == "\u786e\u8ba4\u4fee\u6539\u8d1f\u8d23\u4eba #2"
+    contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
+    combined = "\n".join(contents)
+    assert "????" not in combined
+    assert "**\u4efb\u52a1**" in combined
+    assert "**\u539f\u8d1f\u8d23\u4eba**" in combined
+    assert "**\u65b0\u8d1f\u8d23\u4eba**" in combined
 
 
 def test_build_project_progress_payload_contains_summary_metrics() -> None:
@@ -161,13 +200,15 @@ def test_build_project_progress_payload_contains_summary_metrics() -> None:
     payload = _build_project_progress_payload(summary)
 
     assert payload["msg_type"] == "interactive"
-    assert payload["card"]["header"]["title"]["content"] == "📈 项目进度 | 官网改版"
+    assert payload["card"]["header"]["title"]["content"] == "📊 官网改版 当前进度"
     assert payload["card"]["header"]["template"] == "red"
     contents = [element["content"] for element in payload["card"]["body"]["elements"] if element["tag"] == "markdown"]
     combined = "\n".join(contents)
     assert "完成率：50.0%" in combined
-    assert "任务总数：2" in combined
+    assert "总数：2" in combined
     assert "当前项目存在风险" in combined
+    assert "**📋 重点任务**" in combined
+    assert "#12" in combined
 
 
 def test_build_help_card_payload_lists_commands_and_examples() -> None:

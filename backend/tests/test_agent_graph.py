@@ -2,6 +2,7 @@ from app.agent.confirmed_intents import build_confirmed_action_intent
 from app.agent.schemas import AgentIntent
 from app.agent.graph import run_agent_graph, run_agent_graph_state, run_confirmed_agent_action
 from app.schemas.meeting import MeetingCreate
+from app.services.agent_task_context_service import save_recent_task_context
 from app.services.meeting_service import create_meeting_with_actions
 
 
@@ -177,6 +178,7 @@ def test_agent_graph_resolves_unique_task_reference_before_routing(db_session, m
     assert state["intent_route"] == "update_task_owner"
     assert state["intent"].filters == {
         "action_item_id": str(meeting.action_items[0].id),
+        "reference_note": "根据任务标题或会议标题匹配到该任务",
         "owner_name": "QA",
     }
     assert state["agent_response"].intent.name == "update_task_owner"
@@ -217,3 +219,44 @@ def test_agent_graph_keeps_clarification_when_task_reference_is_ambiguous(db_ses
 
     assert state["intent_route"] == "clarify_task_reference"
     assert state["agent_response"].intent.name == "clarify_task_reference"
+
+
+def test_agent_graph_resolves_second_recent_task_reference(db_session, monkeypatch) -> None:
+    import app.agent.graph as agent_graph
+
+    meeting = create_meeting_with_actions(
+        db_session,
+        MeetingCreate(
+            title="Recent context test",
+            transcript="Action: Frontend fixes login page.\nAction: QA verifies checkout flow.",
+        ),
+    )
+
+    def fake_detect_intent(_message: str) -> AgentIntent:
+        return AgentIntent(
+            name="clarify_task_reference",
+            filters={
+                "missing_fields": "任务编号",
+                "raw_text": "第二个交给运营同学",
+                "target_intent": "update_task_owner",
+                "owner_name": "运营同学",
+            },
+        )
+
+    monkeypatch.setattr(agent_graph, "detect_intent_with_fallback", fake_detect_intent)
+    save_recent_task_context(db_session, "oc_context", meeting.action_items)
+
+    state = run_agent_graph_state(
+        {
+            "db": db_session,
+            "message": "第二个交给运营同学",
+            "chat_id": "oc_context",
+        }
+    )
+
+    assert state["intent_route"] == "update_task_owner"
+    assert state["intent"].filters == {
+        "action_item_id": str(meeting.action_items[1].id),
+        "reference_note": "根据刚才任务列表中的第 2 个任务解析",
+        "owner_name": "运营同学",
+    }

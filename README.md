@@ -549,6 +549,7 @@ npm run build
 
 ## 后续规划
 
+- Agent Tool Registry 已推进到 MCP-ready 形态：工具具备 source/category/dangerous/requires_confirmation 元数据，并通过 LocalAgentToolAdapter 注入默认工具；后续接真实 MCP 或飞书文档、日历、任务系统时，可新增适配器而不是重写 LangGraph 执行链路。
 - 优化长文本展示：列表卡片截断、详情卡片展示完整内容。
 - 增强 Memory，支持按类型分组展示、自然语言记忆和更细粒度的作用域。
 - 将 LLM 解析和飞书发送异步化，引入任务队列。

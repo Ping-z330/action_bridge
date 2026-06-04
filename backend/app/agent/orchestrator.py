@@ -5,11 +5,12 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.agent.graph import run_agent_graph, run_confirmed_agent_action
-from app.agent.schemas import AgentResponse
+from app.agent.schemas import AgentIntent, AgentResponse
 from app.models.pending_agent_action import PendingAgentAction
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
 from app.services.feishu_service import FeishuDeliveryError
+from app.services.agent_task_context_service import save_recent_task_context
 from app.services.meeting_service import (
     list_action_items,
     update_action_item_status,
@@ -61,8 +62,16 @@ def prepare_agent_text_event(
     if not message_text:
         return AgentTextPreparation(ignored=True)
 
-    agent_response = run_agent_graph(db, message_text)
+    agent_response = run_agent_graph(db, message_text, chat_id=pending_chat_id)
     if not agent_response.handled:
+        if _should_send_fallback_help(message_text):
+            return AgentTextPreparation(
+                agent_response=AgentResponse(
+                    handled=True,
+                    intent=AgentIntent(name="fallback_help", filters={"raw_text": message_text}),
+                    message="Agent fallback help is ready.",
+                )
+            )
         return AgentTextPreparation(ignored=True, agent_response=agent_response)
 
     return AgentTextPreparation(agent_response=agent_response)
@@ -144,6 +153,9 @@ def handle_agent_text_event(
     if agent_response.intent and agent_response.intent.name == "help":
         return _send_help_response(db, agent_response, reply_chat_id, dedup_key, delivery)
 
+    if agent_response.intent and agent_response.intent.name == "fallback_help":
+        return _send_fallback_help_response(db, agent_response, reply_chat_id, dedup_key, delivery)
+
     if agent_response.intent and agent_response.intent.name == "create_task_missing_info":
         return _send_create_task_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
 
@@ -191,6 +203,15 @@ def handle_agent_text_event(
 
 def _build_agent_response(db: Session, message_text: str) -> AgentResponse:
     return run_agent_graph(db, message_text)
+
+
+def _should_send_fallback_help(message_text: str) -> bool:
+    stripped = message_text.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("/"):
+        return False
+    return any(keyword in stripped for keyword in ("?", "？", "怎么", "如何", "哪些", "什么", "查", "看", "帮我"))
 
 
 def _handle_confirmation(
@@ -314,21 +335,27 @@ def _handle_pending_revision(
                 receive_id=reply_chat_id,
             )
         elif pending.action_type == "update_task_deadline":
-            delivery.send_task_deadline_update_confirmation(
-                action_item_id=int(updated_payload["action_item_id"]),
-                title=updated_payload["title"],
-                old_deadline=updated_payload["old_deadline"],
-                new_deadline=updated_payload["new_deadline"],
-                receive_id=reply_chat_id,
-            )
+            confirmation_kwargs = {
+                "action_item_id": int(updated_payload["action_item_id"]),
+                "title": updated_payload["title"],
+                "old_deadline": updated_payload["old_deadline"],
+                "new_deadline": updated_payload["new_deadline"],
+                "receive_id": reply_chat_id,
+            }
+            if updated_payload.get("reference_note"):
+                confirmation_kwargs["reference_note"] = updated_payload["reference_note"]
+            delivery.send_task_deadline_update_confirmation(**confirmation_kwargs)
         elif pending.action_type == "update_task_owner":
-            delivery.send_task_owner_update_confirmation(
-                action_item_id=int(updated_payload["action_item_id"]),
-                title=updated_payload["title"],
-                old_owner_name=updated_payload["old_owner_name"],
-                new_owner_name=updated_payload["new_owner_name"],
-                receive_id=reply_chat_id,
-            )
+            confirmation_kwargs = {
+                "action_item_id": int(updated_payload["action_item_id"]),
+                "title": updated_payload["title"],
+                "old_owner_name": updated_payload["old_owner_name"],
+                "new_owner_name": updated_payload["new_owner_name"],
+                "receive_id": reply_chat_id,
+            }
+            if updated_payload.get("reference_note"):
+                confirmation_kwargs["reference_note"] = updated_payload["reference_note"]
+            delivery.send_task_owner_update_confirmation(**confirmation_kwargs)
         else:
             mark_feishu_event_finished(db, dedup_key, "failed")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported pending action")
@@ -371,6 +398,50 @@ def _send_help_response(
         "intent": agent_response.intent.name if agent_response.intent else "unknown",
         "message": agent_response.message,
     }
+
+
+def _send_fallback_help_response(
+    db: Session,
+    agent_response: AgentResponse,
+    reply_chat_id: str | None,
+    dedup_key: str | None,
+    delivery: FeishuDeliveryPort,
+) -> dict[str, Any]:
+    try:
+        delivery.send_pending_action_notice(
+            "🤖 我还没理解你的操作意图",
+            _build_fallback_help_notice(),
+            receive_id=reply_chat_id,
+        )
+    except FeishuDeliveryError as exc:
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "agent_fallback",
+            "intent": agent_response.intent.name if agent_response.intent else "fallback_help",
+            "message": f"Fallback help generated, but Feishu delivery failed: {exc}",
+        }
+
+    mark_feishu_event_finished(db, dedup_key, "finished")
+    return {
+        "status": "agent_fallback",
+        "intent": agent_response.intent.name if agent_response.intent else "fallback_help",
+        "message": agent_response.message,
+    }
+
+
+def _build_fallback_help_notice() -> str:
+    return "\n".join(
+        [
+            "我主要负责会议执行闭环，不会随意处理和任务无关的问题。",
+            "",
+            "**你可以这样问：**",
+            "· `/tasks` 查看当前未完成任务",
+            "· `查询已完成任务` 查看已完成任务",
+            "· `官网改版进度怎么样` 查看项目进度",
+            "· `把 12 号任务负责人改成测试同学` 修改负责人",
+            "· `把 12 号任务延期到周五` 修改截止时间",
+        ]
+    )
 
 
 def _send_create_task_clarification(
@@ -490,15 +561,19 @@ def _request_deadline_update_confirmation(
         title=action_item.title,
         old_deadline=action_item.deadline,
         new_deadline=new_deadline,
+        reference_note=agent_response.intent.filters.get("reference_note", ""),
     )
     try:
-        delivery.send_task_deadline_update_confirmation(
-            action_item_id=action_item_id,
-            title=action_item.title,
-            old_deadline=action_item.deadline,
-            new_deadline=new_deadline,
-            receive_id=reply_chat_id,
-        )
+        confirmation_kwargs = {
+            "action_item_id": action_item_id,
+            "title": action_item.title,
+            "old_deadline": action_item.deadline,
+            "new_deadline": new_deadline,
+            "receive_id": reply_chat_id,
+        }
+        if agent_response.intent.filters.get("reference_note"):
+            confirmation_kwargs["reference_note"] = agent_response.intent.filters["reference_note"]
+        delivery.send_task_deadline_update_confirmation(**confirmation_kwargs)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -542,15 +617,19 @@ def _request_owner_update_confirmation(
         title=action_item.title,
         old_owner_name=action_item.owner_name,
         new_owner_name=new_owner_name,
+        reference_note=agent_response.intent.filters.get("reference_note", ""),
     )
     try:
-        delivery.send_task_owner_update_confirmation(
-            action_item_id=action_item_id,
-            title=action_item.title,
-            old_owner_name=action_item.owner_name,
-            new_owner_name=new_owner_name,
-            receive_id=reply_chat_id,
-        )
+        confirmation_kwargs = {
+            "action_item_id": action_item_id,
+            "title": action_item.title,
+            "old_owner_name": action_item.owner_name,
+            "new_owner_name": new_owner_name,
+            "receive_id": reply_chat_id,
+        }
+        if agent_response.intent.filters.get("reference_note"):
+            confirmation_kwargs["reference_note"] = agent_response.intent.filters["reference_note"]
+        delivery.send_task_owner_update_confirmation(**confirmation_kwargs)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -650,8 +729,17 @@ def _send_query_tasks_result(
     dedup_key: str | None,
     delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
+    context_chat_id = reply_chat_id or "default"
+    save_recent_task_context(db, context_chat_id, agent_response.items[:10])
     try:
-        delivery.send_open_tasks_summary(agent_response.items[:10], receive_id=reply_chat_id)
+        if agent_response.items:
+            delivery.send_open_tasks_summary(agent_response.items[:10], receive_id=reply_chat_id)
+        else:
+            delivery.send_pending_action_notice(
+                "🔎 没有找到符合条件的任务",
+                _build_empty_query_notice(agent_response),
+                receive_id=reply_chat_id,
+            )
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -668,3 +756,34 @@ def _send_query_tasks_result(
         "task_count": len(agent_response.items),
         "message": agent_response.message,
     }
+
+
+def _build_empty_query_notice(agent_response: AgentResponse) -> str:
+    filters = agent_response.intent.filters if agent_response.intent else {}
+    condition = _describe_query_filters(filters)
+    return "\n".join(
+        [
+            f"没有找到{condition}的任务。",
+            "",
+            "**你可以这样试试：**",
+            "· `/tasks` 查看当前未完成任务",
+            "· `查询已完成任务` 查看已完成任务",
+            "· `官网改版进度怎么样` 查看项目进度",
+            "· `官网改版相关任务` 查看指定项目任务",
+        ]
+    )
+
+
+def _describe_query_filters(filters: dict[str, str]) -> str:
+    status_label = {
+        "pending": "待处理",
+        "in_progress": "进行中",
+        "completed": "已完成",
+        "failed": "有风险",
+    }.get(filters.get("status", ""), "")
+    due_label = {
+        "due_today": "今日到期",
+        "overdue": "已逾期",
+    }.get(filters.get("due_status", ""), "")
+    parts = [part for part in (status_label, due_label, filters.get("owner"), filters.get("keyword")) if part]
+    return "、".join(parts)

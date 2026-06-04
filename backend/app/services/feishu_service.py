@@ -79,12 +79,14 @@ def send_task_deadline_update_confirmation(
     old_deadline: str,
     new_deadline: str,
     receive_id: str | None = None,
+    reference_note: str = "",
 ) -> str:
     payload = _build_task_deadline_update_confirmation_payload(
         action_item_id,
         title,
         old_deadline,
         new_deadline,
+        reference_note,
     )
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务截止时间修改确认卡片已发送到飞书。"
@@ -96,12 +98,14 @@ def send_task_owner_update_confirmation(
     old_owner_name: str,
     new_owner_name: str,
     receive_id: str | None = None,
+    reference_note: str = "",
 ) -> str:
     payload = _build_task_owner_update_confirmation_payload(
         action_item_id,
         title,
         old_owner_name,
         new_owner_name,
+        reference_note,
     )
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务负责人修改确认卡片已发送到飞书。"
@@ -239,25 +243,31 @@ def _get_tenant_access_token() -> str:
 
 
 def _build_meeting_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
+    elements = [
+        _markdown_block(_build_meeting_status_section(meeting)),
+        _divider(),
+        _markdown_block(_build_meeting_decision_section(meeting.decisions)),
+        _divider(),
+        _markdown_block(_build_meeting_action_items_section(meeting.action_items)),
+    ]
+    follow_up_section = _build_meeting_follow_up_section(meeting.raw_transcript)
+    if follow_up_section:
+        elements.extend([_divider(), _markdown_block(follow_up_section)])
+    elements.extend([_divider(), _markdown_block(_build_meeting_risk_notice(meeting))])
+
     return {
         "msg_type": "interactive",
         "card": {
             "schema": "2.0",
             "config": {"update_multi": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"📌 会议纪要 | {meeting.title}"},
+                "title": {"tag": "plain_text", "content": f"📢 {meeting.title}"},
                 "template": "blue",
             },
             "body": {
                 "direction": "vertical",
                 "padding": "12px 12px 12px 12px",
-                "elements": [
-                    _markdown_block(f"**📝 会议摘要**\n{meeting.summary}"),
-                    _markdown_block(f"**✅ 会议结论**\n{_format_bullets(meeting.decisions)}"),
-                    _markdown_block("**📍 行动项**"),
-                    *_build_action_item_elements(meeting.action_items),
-                    _markdown_block("**💡 状态更新**\n请在 ActionBridge 后台任务结果页确认完成状态，机器人会持续跟进未完成任务。"),
-                ],
+                "elements": elements,
             },
         },
     }
@@ -268,23 +278,15 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
 
     if unfinished_items:
         body_elements = [
-            _markdown_block("**📍 待跟进行动项**\n请优先关注以下尚未完成的任务。"),
-            *_build_action_item_elements(unfinished_items),
-            _markdown_block(
-                "\n".join(
-                    [
-                        "**💡 直接回复更新状态**",
-                        "`完成了 #任务ID` 标记已完成",
-                        "`#任务ID 还在进行中` 标记进行中",
-                        "`#任务ID 有风险` 标记有风险",
-                        "也可以在 ActionBridge 后台任务结果页更新。",
-                    ]
-                )
-            ),
+            _markdown_block(_build_follow_up_overview(unfinished_items)),
+            _divider(),
+            _markdown_block(_build_follow_up_items(unfinished_items)),
+            _divider(),
+            _markdown_block(_build_compact_task_operations()),
         ]
         template = "orange"
     else:
-        body_elements = [_markdown_block("**📍 待跟进行动项**\n当前所有行动项都已完成，无需继续跟进。")]
+        body_elements = [_markdown_block("**📍 待跟进行动项**\n· 当前所有行动项都已完成，无需继续跟进。")]
         template = "green"
 
     return {
@@ -330,32 +332,34 @@ def _build_action_item_completed_payload(action_item_id: int, title: str, owner_
 
 
 def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, Any]:
-    materialized = [item for item in items if item.status != "completed"]
+    raw_items = list(items)
+    completed_only = bool(raw_items) and all(item.status == "completed" for item in raw_items)
+    materialized = raw_items if completed_only else [item for item in raw_items if item.status != "completed"]
     visible_items = materialized[:10]
     overdue_count = len([item for item in materialized if item.due_status == "overdue"])
     due_today_count = len([item for item in materialized if item.due_status == "due_today"])
     template = "red" if overdue_count else "orange" if due_today_count else "blue"
+    title = "📋 任务查询结果" if completed_only else "📋 当前未完成任务"
 
     if visible_items:
         elements = [
             _markdown_block(
-                "\n".join(
-                    [
-                        f"**当前未完成任务：{len(materialized)} 项**",
-                        f"已逾期：{overdue_count} 项",
-                        f"今日到期：{due_today_count} 项",
-                        "完成任务可直接发送：`/done 任务ID`",
-                    ]
+                _build_open_tasks_overview(
+                    len(materialized),
+                    overdue_count,
+                    due_today_count,
+                    label="查询结果" if completed_only else "当前未完成任务",
                 )
             ),
             _divider(),
-            *_build_open_task_elements(visible_items),
+            _markdown_block(_build_open_tasks_compact_items(visible_items)),
+            _divider(),
+            _markdown_block(_build_compact_task_operations(show_done=not completed_only)),
         ]
         if len(materialized) > len(visible_items):
-            elements.append(_divider())
             elements.append(_markdown_block(f"还有 {len(materialized) - len(visible_items)} 项未展示，请到 ActionBridge 任务结果页查看。"))
     else:
-        elements = [_markdown_block("当前没有未完成任务，执行闭环状态良好。")]
+        elements = [_markdown_block("**当前未完成任务**\n· 当前没有未完成任务，执行闭环状态良好。")]
 
     return {
         "msg_type": "interactive",
@@ -363,7 +367,7 @@ def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, 
             "schema": "2.0",
             "config": {"update_multi": True},
             "header": {
-                "title": {"tag": "plain_text", "content": "📋 当前未完成任务"},
+                "title": {"tag": "plain_text", "content": title},
                 "template": template,
             },
             "body": {
@@ -506,29 +510,25 @@ def _build_task_deadline_update_confirmation_payload(
     title: str,
     old_deadline: str,
     new_deadline: str,
+    reference_note: str = "",
 ) -> dict[str, Any]:
-    return {
-        "msg_type": "interactive",
-        "card": {
-            "schema": "2.0",
-            "config": {"update_multi": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": f"⏰ 请确认修改任务 #{action_item_id}"},
-                "template": "blue",
-            },
-            "body": {
-                "direction": "vertical",
-                "padding": "12px 12px 12px 12px",
-                "elements": [
-                    _markdown_block(f"**任务目标**\n{title}"),
-                    _markdown_block(f"**原截止时间**\n{old_deadline or '待确认'}"),
-                    _markdown_block(f"**新截止时间**\n{new_deadline}"),
-                    _divider(),
-                    _markdown_block("回复 `确认` 执行修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
-                ],
-            },
-        },
-    }
+    elements = [
+        _markdown_block(f"**任务**\n{title}"),
+        _markdown_block(f"**原截止时间**\n{old_deadline or '未设置'}"),
+        _markdown_block(f"**新截止时间**\n{new_deadline}"),
+    ]
+    if reference_note:
+        elements.append(_markdown_block(f"**解析依据**\n{reference_note}"))
+    elements.extend(
+        [
+            _divider(),
+            _markdown_block("回复 `确认` 应用修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
+        ]
+    )
+    return _build_task_update_confirmation_payload(
+        header_title=f"确认修改截止时间 #{action_item_id}",
+        elements=elements,
+    )
 
 
 def _build_task_owner_update_confirmation_payload(
@@ -536,29 +536,25 @@ def _build_task_owner_update_confirmation_payload(
     title: str,
     old_owner_name: str,
     new_owner_name: str,
+    reference_note: str = "",
 ) -> dict[str, Any]:
-    return {
-        "msg_type": "interactive",
-        "card": {
-            "schema": "2.0",
-            "config": {"update_multi": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": f"👤 请确认修改任务 #{action_item_id}"},
-                "template": "blue",
-            },
-            "body": {
-                "direction": "vertical",
-                "padding": "12px 12px 12px 12px",
-                "elements": [
-                    _markdown_block(f"**任务目标**\n{title}"),
-                    _markdown_block(f"**原负责人**\n{old_owner_name or '待确认'}"),
-                    _markdown_block(f"**新负责人**\n{new_owner_name}"),
-                    _divider(),
-                    _markdown_block("回复 `确认` 执行修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
-                ],
-            },
-        },
-    }
+    elements = [
+        _markdown_block(f"**任务**\n{title}"),
+        _markdown_block(f"**原负责人**\n{old_owner_name or '未设置'}"),
+        _markdown_block(f"**新负责人**\n{new_owner_name}"),
+    ]
+    if reference_note:
+        elements.append(_markdown_block(f"**解析依据**\n{reference_note}"))
+    elements.extend(
+        [
+            _divider(),
+            _markdown_block("回复 `确认` 应用修改，回复 `取消` 放弃。本次确认 30 分钟内有效。"),
+        ]
+    )
+    return _build_task_update_confirmation_payload(
+        header_title=f"确认修改负责人 #{action_item_id}",
+        elements=elements,
+    )
 
 
 def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, Any]:
@@ -575,6 +571,25 @@ def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, 
                 "direction": "vertical",
                 "padding": "12px 12px 12px 12px",
                 "elements": [_markdown_block(message)],
+            },
+        },
+    }
+
+
+def _build_task_update_confirmation_payload(header_title: str, elements: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "config": {"update_multi": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": header_title},
+                "template": "blue",
+            },
+            "body": {
+                "direction": "vertical",
+                "padding": "12px 12px 12px 12px",
+                "elements": elements,
             },
         },
     }
@@ -597,32 +612,18 @@ def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str
             "schema": "2.0",
             "config": {"update_multi": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"📈 项目进度 | {summary.keyword}"},
+                "title": {"tag": "plain_text", "content": f"📊 {summary.keyword} 当前进度"},
                 "template": template,
             },
             "body": {
                 "direction": "vertical",
                 "padding": "12px 12px 12px 12px",
                 "elements": [
-                    _markdown_block(
-                        "\n".join(
-                            [
-                                f"**完成率：{summary.completion_rate}%**",
-                                f"任务总数：{summary.total_count}",
-                                f"已完成：{summary.completed_count}",
-                                f"进行中：{summary.in_progress_count}",
-                                f"待处理：{summary.pending_count}",
-                                f"有风险：{summary.failed_count}",
-                                f"逾期：{summary.overdue_count}",
-                                f"今日到期：{summary.due_today_count}",
-                            ]
-                        )
-                    ),
+                    _markdown_block(_build_project_progress_overview(summary)),
                     _divider(),
-                    _markdown_block(f"**结论**\n{summary.conclusion}"),
+                    _markdown_block(f"**⚠️ 进度判断**\n{summary.conclusion}"),
                     _divider(),
-                    _markdown_block("**相关任务**"),
-                    *_build_open_task_elements(summary.items[:5]),
+                    _markdown_block(_build_project_progress_items(summary.items[:5])),
                 ],
             },
         },
@@ -815,6 +816,196 @@ def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dic
         elements.pop()
 
     return elements
+
+
+def _build_meeting_status_section(meeting: MeetingResponse) -> str:
+    status_lines = _extract_section_lines(meeting.raw_transcript, ("当前状态",), ("已确认决策", "待办事项", "后续跟进"))
+    if not status_lines:
+        status_lines = [meeting.summary] if meeting.summary else []
+    return "\n".join(["**当前状态**", *_format_dot_lines(status_lines)])
+
+
+def _build_meeting_decision_section(decisions: Iterable[str]) -> str:
+    materialized = [decision.strip() for decision in decisions if decision.strip()]
+    if not materialized:
+        return "**✅ 已确认决策**\n· 暂无明确决策"
+    lines = [f"{index}. {decision}" for index, decision in enumerate(materialized, start=1)]
+    return "\n".join(["**✅ 已确认决策**", *lines])
+
+
+def _build_meeting_action_items_section(items: Iterable[ActionItemResponse]) -> str:
+    materialized = list(items)
+    if not materialized:
+        return "**📋 待办事项**\n· 暂无待办事项"
+
+    lines = [
+        "· "
+        + f"负责人：{item.owner_name or '待确认'}，"
+        + f"任务：{_normalize_action_title(item.title, item.owner_name)}，"
+        + f"截止时间：{item.deadline or '待确认'}"
+        for item in materialized
+    ]
+    return "\n".join(["**📋 待办事项**", *lines])
+
+
+def _build_meeting_follow_up_section(transcript: str) -> str:
+    follow_up_lines = _extract_section_lines(transcript, ("后续跟进",), ("风险", "提醒", "⚠", "待办事项"))
+    if not follow_up_lines:
+        return ""
+    return "\n".join(["**🔜 后续跟进**", *_format_dot_lines(follow_up_lines)])
+
+
+def _build_meeting_risk_notice(meeting: MeetingResponse) -> str:
+    warning_lines = _extract_warning_lines(meeting.raw_transcript)
+    if warning_lines:
+        return "\n".join([f"> ⚠️ {line}" for line in warning_lines])
+
+    unfinished_count = len([item for item in meeting.action_items if item.status in {"pending", "in_progress", "failed"}])
+    if unfinished_count:
+        return f"> ⚠️ 当前仍有 {unfinished_count} 个行动项待跟进，请各负责人及时同步完成状态。"
+    return "> ✅ 当前行动项均已完成，暂无待跟进事项。"
+
+
+def _build_project_progress_overview(summary: ProjectProgressSummary) -> str:
+    return "\n".join(
+        [
+            f"**完成率：{summary.completion_rate}%**",
+            (
+                f"· 总数：{summary.total_count} ｜ 已完成：{summary.completed_count} ｜ "
+                f"进行中：{summary.in_progress_count} ｜ 待处理：{summary.pending_count}"
+            ),
+            f"· 逾期：{summary.overdue_count} ｜ 今日到期：{summary.due_today_count} ｜ 有风险：{summary.failed_count}",
+        ]
+    )
+
+
+def _build_project_progress_items(items: Iterable[ActionItemListItem]) -> str:
+    materialized = list(items)
+    if not materialized:
+        return "**📋 重点任务**\n· 暂无相关任务"
+
+    lines = []
+    for item in materialized:
+        risk_prefix = "🚨" if item.due_status == "overdue" else "⏰" if item.due_status == "due_today" else "📌"
+        title = _normalize_action_title(item.title, item.owner_name)
+        lines.append(
+            f"· {risk_prefix} #{item.id} {title}，负责人：{item.owner_name}，"
+            f"截止：{item.deadline or '待确认'}，状态：{_get_status_label(item.status)}"
+        )
+    return "\n".join(["**📋 重点任务**", *lines])
+
+
+def _build_open_tasks_overview(
+    total_count: int,
+    overdue_count: int,
+    due_today_count: int,
+    *,
+    label: str = "当前未完成任务",
+) -> str:
+    return "\n".join(
+        [
+            f"**{label}：{total_count} 项**",
+            f"· 已逾期：{overdue_count} ｜ 今日到期：{due_today_count}",
+        ]
+    )
+
+
+def _build_open_tasks_compact_items(items: Iterable[ActionItemListItem]) -> str:
+    materialized = list(items)
+    if not materialized:
+        return "**📋 任务清单**\n· 暂无未完成任务"
+    return "\n".join(["**📋 任务清单**", *[_format_compact_task_item(item) for item in materialized]])
+
+
+def _build_follow_up_overview(items: Iterable[ActionItemResponse]) -> str:
+    materialized = list(items)
+    return "\n".join(
+        [
+            f"**待跟进行动项：{len(materialized)} 项**",
+            "· 请优先确认以下任务完成状态，有问题及时同步。",
+        ]
+    )
+
+
+def _build_follow_up_items(items: Iterable[ActionItemResponse]) -> str:
+    materialized = list(items)
+    if not materialized:
+        return "**📋 跟进清单**\n· 暂无待跟进行动项"
+    lines = [
+        f"· 📌 #{item.id} {_normalize_action_title(item.title, item.owner_name)}，"
+        f"负责人：{item.owner_name}，截止：{item.deadline or '待确认'}，状态：{_get_status_label(item.status)}"
+        for item in materialized
+    ]
+    return "\n".join(["**📋 跟进清单**", *lines])
+
+
+def _format_compact_task_item(item: ActionItemListItem) -> str:
+    risk_prefix = "🚨" if item.due_status == "overdue" else "⏰" if item.due_status == "due_today" else "📌"
+    title = _normalize_action_title(item.title, item.owner_name)
+    return (
+        f"· {risk_prefix} #{item.id} {title}，负责人：{item.owner_name}，"
+        f"截止：{item.deadline or '待确认'}，状态：{_get_status_label(item.status)}"
+    )
+
+
+def _build_compact_task_operations(*, show_done: bool = True) -> str:
+    operation_line = (
+        "· 完成任务：`/done 任务ID` ｜ 查看详情：`/task 任务ID`"
+        if show_done
+        else "· 查看详情：`/task 任务ID`"
+    )
+    extra_line = (
+        "· 也可以直接回复：`#任务ID 有风险`、`#任务ID 还在进行中`"
+        if show_done
+        else "· 如需重新跟进，可在后台把状态改回待处理或进行中。"
+    )
+    return "\n".join(
+        [
+            "**操作**",
+            operation_line,
+            extra_line,
+        ]
+    )
+
+
+def _extract_section_lines(transcript: str, starts: tuple[str, ...], stops: tuple[str, ...]) -> list[str]:
+    lines = [_clean_meeting_line(line) for line in transcript.splitlines()]
+    lines = [line for line in lines if line]
+    collecting = False
+    result: list[str] = []
+    for line in lines:
+        if _line_contains_any(line, starts):
+            collecting = True
+            continue
+        if collecting and _line_contains_any(line, stops):
+            break
+        if collecting:
+            result.append(line)
+    return result
+
+
+def _extract_warning_lines(transcript: str) -> list[str]:
+    return [
+        _clean_meeting_line(line)
+        for line in transcript.splitlines()
+        if "⚠" in line or "风险" in line or "及时同步" in line
+        if _clean_meeting_line(line)
+    ]
+
+
+def _format_dot_lines(lines: Iterable[str]) -> list[str]:
+    return [f"· {line.strip()}" for line in lines if line.strip()]
+
+
+def _clean_meeting_line(line: str) -> str:
+    cleaned = line.strip().strip("-").strip()
+    for prefix in ("📢", "✅", "📋", "🔜", "⚠️", "⚠"):
+        cleaned = cleaned.removeprefix(prefix).strip()
+    return cleaned
+
+
+def _line_contains_any(line: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in line for keyword in keywords)
 
 
 def _markdown_block(content: str) -> dict[str, Any]:

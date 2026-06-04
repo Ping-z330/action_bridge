@@ -1,4 +1,5 @@
-from datetime import UTC, date, datetime
+import json
+from datetime import UTC, datetime
 
 from app.schemas.meeting import MeetingResponse
 
@@ -125,6 +126,25 @@ def _natural_language_event(text: str, message_id: str = "om_agent_1", chat_id: 
             }
         },
     }
+
+
+def _group_natural_language_event(
+    text: str,
+    *,
+    message_id: str = "om_group_agent_1",
+    chat_id: str = "oc_group",
+    mentions: list[dict] | None = None,
+) -> dict:
+    message = {
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "chat_type": "group",
+        "message_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }
+    if mentions is not None:
+        message["mentions"] = mentions
+    return {"header": {"event_id": message_id}, "event": {"message": message}}
 
 
 def _task_event(action_item_id: int | str, message_id: str = "om_task_1", chat_id: str = "oc_source") -> dict:
@@ -315,6 +335,69 @@ def test_feishu_events_lists_open_tasks(client, monkeypatch) -> None:
     assert sent_batches[0][0].status != "completed"
 
 
+def test_feishu_events_confirms_contextual_second_task_update(client, monkeypatch) -> None:
+    import app.agent.graph as agent_graph
+    import app.api.routes as routes
+    from app.agent.schemas import AgentIntent
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Contextual update test",
+            "transcript": "\n".join(
+                [
+                    "Action: Frontend fixes login page.",
+                    "Action: QA verifies checkout flow.",
+                ]
+            ),
+        },
+    )
+    second_action_item_id = create_response.json()["action_items"][1]["id"]
+
+    monkeypatch.setattr(routes, "send_open_tasks_summary", lambda *_args, **_kwargs: "sent")
+
+    def fake_detect_intent(_message: str) -> AgentIntent:
+        return AgentIntent(
+            name="clarify_task_reference",
+            filters={
+                "missing_fields": "任务编号",
+                "raw_text": "第二个交给运营同学",
+                "target_intent": "update_task_owner",
+                "owner_name": "运营同学",
+            },
+        )
+
+    monkeypatch.setattr(agent_graph, "detect_intent_with_fallback", fake_detect_intent)
+    sent_confirmations = []
+
+    def fake_owner_confirmation(
+        action_item_id: int,
+        title: str,
+        old_owner_name: str,
+        new_owner_name: str,
+        receive_id: str | None = None,
+        reference_note: str = "",
+    ) -> str:
+        assert receive_id == "oc_source"
+        sent_confirmations.append((action_item_id, title, old_owner_name, new_owner_name, reference_note))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_task_owner_update_confirmation", fake_owner_confirmation)
+
+    list_response = client.post("/api/feishu/events", json=_tasks_event(message_id="om_context_tasks"))
+    update_response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("第二个交给运营同学", message_id="om_context_second"),
+    )
+
+    assert list_response.status_code == 200
+    assert update_response.status_code == 200
+    assert update_response.json()["status"] == "task_owner_update_pending"
+    assert sent_confirmations[0][0] == second_action_item_id
+    assert sent_confirmations[0][3] == "运营同学"
+    assert "第 2 个任务" in sent_confirmations[0][4]
+
+
 def test_feishu_events_lists_empty_open_tasks(client, monkeypatch) -> None:
     import app.api.routes as routes
 
@@ -485,6 +568,8 @@ def test_feishu_events_rejects_invalid_task_command(client) -> None:
 
 def test_feishu_events_agent_lists_due_today_tasks(client, monkeypatch) -> None:
     import app.api.routes as routes
+    from app.db.session import SessionLocal
+    from app.services.agent_task_context_service import load_recent_task_ids
 
     create_response = client.post(
         "/api/meetings",
@@ -495,7 +580,7 @@ def test_feishu_events_agent_lists_due_today_tasks(client, monkeypatch) -> None:
     )
     meeting = create_response.json()
     action_item_id = meeting["action_items"][0]["id"]
-    today = date.today().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     client.patch(
         f"/api/action-items/{action_item_id}",
         json={
@@ -522,6 +607,77 @@ def test_feishu_events_agent_lists_due_today_tasks(client, monkeypatch) -> None:
     assert response.json()["intent"] == "query_tasks"
     assert response.json()["task_count"] == 1
     assert sent_batches[0][0].id == action_item_id
+    db = SessionLocal()
+    try:
+        assert load_recent_task_ids(db, "oc_source") == [action_item_id]
+    finally:
+        db.close()
+
+
+def test_feishu_events_agent_lists_completed_tasks(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "Completed query test",
+            "transcript": "Action: Frontend finishes landing page QA.",
+        },
+    )
+    meeting = create_response.json()
+    action_item_id = meeting["action_items"][0]["id"]
+    client.patch(
+        f"/api/action-items/{action_item_id}",
+        json={
+            "owner_name": "前端同学",
+            "deadline": "昨天",
+            "status": "completed",
+        },
+    )
+    sent_batches = []
+
+    def fake_send(items, receive_id: str | None = None) -> str:
+        sent_batches.append(list(items))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_open_tasks_summary", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("查询已经完成的任务", message_id="om_completed_query"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_replied"
+    assert response.json()["intent"] == "query_tasks"
+    assert response.json()["task_count"] == 1
+    assert sent_batches[0][0].id == action_item_id
+    assert sent_batches[0][0].status == "completed"
+
+
+def test_feishu_events_agent_sends_empty_query_notice(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    notices = []
+
+    def fake_notice(title: str, message: str, receive_id: str | None = None) -> str:
+        notices.append((title, message, receive_id))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_pending_action_notice", fake_notice)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("查询已经完成的任务", message_id="om_completed_empty_query"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_replied"
+    assert response.json()["intent"] == "query_tasks"
+    assert response.json()["task_count"] == 0
+    assert notices[0][0] == "🔎 没有找到符合条件的任务"
+    assert "没有找到已完成的任务" in notices[0][1]
+    assert "/tasks" in notices[0][1]
 
 
 def test_feishu_events_agent_updates_task_status(client, monkeypatch) -> None:
@@ -1221,6 +1377,88 @@ def test_feishu_events_agent_ignores_unrelated_chat(client) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
+
+
+def test_feishu_events_agent_sends_fallback_for_unknown_question(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    notices = []
+
+    def fake_notice(title: str, message: str, receive_id: str | None = None) -> str:
+        notices.append((title, message, receive_id))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_pending_action_notice", fake_notice)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_natural_language_event("今天适合喝咖啡吗？", message_id="om_unknown_question"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "agent_fallback"
+    assert response.json()["intent"] == "fallback_help"
+    assert notices[0][0] == "🤖 我还没理解你的操作意图"
+    assert "会议执行闭环" in notices[0][1]
+    assert "/tasks" in notices[0][1]
+
+
+def test_feishu_events_ignores_group_natural_language_without_bot_mention(client) -> None:
+    response = client.post(
+        "/api/feishu/events",
+        json=_group_natural_language_event("你能做什么", message_id="om_group_no_mention"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["message"] == "group_message_without_bot_mention"
+
+
+def test_feishu_events_accepts_group_natural_language_when_bot_is_mentioned(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_receive_ids = []
+
+    def fake_send(receive_id: str | None = None) -> str:
+        sent_receive_ids.append(receive_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_help_card", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_group_natural_language_event(
+            "@_user_1 你能做什么",
+            message_id="om_group_with_mention",
+            mentions=[{"key": "@_user_1", "name": "ActionBridge"}],
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "help_sent"
+    assert response.json()["intent"] == "help"
+    assert sent_receive_ids == ["oc_group"]
+
+
+def test_feishu_events_accepts_group_fixed_command_without_bot_mention(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    sent_counts = []
+
+    def fake_send(items, receive_id: str | None = None) -> str:
+        sent_counts.append((len(list(items)), receive_id))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_open_tasks_summary", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_group_natural_language_event("/tasks", message_id="om_group_tasks"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "listed"
+    assert sent_counts == [(0, "oc_group")]
 
 
 def test_feishu_events_deduplicates_tasks_command(client, monkeypatch) -> None:

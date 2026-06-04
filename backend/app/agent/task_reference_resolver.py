@@ -1,3 +1,5 @@
+import re
+
 from app.agent.schemas import AgentIntent
 from app.schemas.task_result import ActionItemListItem
 
@@ -9,6 +11,7 @@ def resolve_task_reference_intent(
     intent: AgentIntent | None,
     message: str,
     action_items: list[ActionItemListItem],
+    recent_task_ids: list[int] | None = None,
 ) -> AgentIntent | None:
     if not intent or intent.name != "clarify_task_reference":
         return intent
@@ -17,13 +20,20 @@ def resolve_task_reference_intent(
     if not target_intent:
         return intent
 
-    matched_item = _find_unique_task_reference(message, action_items)
+    reference_note = ""
+    matched_item, reference_note = _find_contextual_task_reference(message, action_items, recent_task_ids or [])
+    if not matched_item:
+        matched_item = _find_unique_task_reference(message, action_items)
+        if matched_item:
+            reference_note = "根据任务标题或会议标题匹配到该任务"
     if not matched_item:
         return intent
 
     filters = {
         "action_item_id": str(matched_item.id),
     }
+    if reference_note:
+        filters["reference_note"] = reference_note
     if target_intent == "update_task_owner":
         filters["owner_name"] = intent.filters["owner_name"]
     elif target_intent == "update_task_deadline":
@@ -34,6 +44,52 @@ def resolve_task_reference_intent(
         return intent
 
     return AgentIntent(name=target_intent, filters=filters)
+
+
+def _find_contextual_task_reference(
+    message: str,
+    action_items: list[ActionItemListItem],
+    recent_task_ids: list[int],
+) -> tuple[ActionItemListItem | None, str]:
+    if not recent_task_ids:
+        return None, ""
+
+    index = _extract_context_index(message)
+    if index is None or index < 0 or index >= len(recent_task_ids):
+        return None, ""
+
+    target_id = recent_task_ids[index]
+    item = next((item for item in action_items if item.id == target_id), None)
+    if not item:
+        return None, ""
+    return item, f"根据刚才任务列表中的第 {index + 1} 个任务解析"
+
+
+def _extract_context_index(message: str) -> int | None:
+    normalized = message.strip().lower()
+    if any(keyword in normalized for keyword in ("刚才那个", "刚刚那个", "上一个", "这个任务", "那个任务")):
+        return 0
+
+    digit_match = re.search(r"第\s*(\d+)\s*个", normalized)
+    if digit_match:
+        return int(digit_match.group(1)) - 1
+
+    chinese_indexes = {
+        "第一个": 0,
+        "第二个": 1,
+        "第三个": 2,
+        "第四个": 3,
+        "第五个": 4,
+        "第六个": 5,
+        "第七个": 6,
+        "第八个": 7,
+        "第九个": 8,
+        "第十个": 9,
+    }
+    for keyword, index in chinese_indexes.items():
+        if keyword in normalized:
+            return index
+    return None
 
 
 def _target_intent_from_filters(filters: dict[str, str]) -> str | None:

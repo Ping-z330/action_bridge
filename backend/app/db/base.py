@@ -1,5 +1,6 @@
 from app.db.session import Base
 from app.models.action_item import ActionItem
+from app.models.agent_task_context import AgentTaskContext
 from app.models.feishu_event_log import FeishuEventLog
 from app.models.follow_up_log import FollowUpLog
 from app.models.memory_alias import MemoryAlias
@@ -11,6 +12,7 @@ __all__ = [
     "Base",
     "Meeting",
     "ActionItem",
+    "AgentTaskContext",
     "Task",
     "FollowUpLog",
     "FeishuEventLog",

@@ -64,6 +64,7 @@ def save_pending_update_task_deadline(
     title: str,
     old_deadline: str,
     new_deadline: str,
+    reference_note: str = "",
 ) -> PendingAgentAction:
     cancel_pending_actions(db, chat_id)
     pending = PendingAgentAction(
@@ -75,6 +76,7 @@ def save_pending_update_task_deadline(
                 "title": title,
                 "old_deadline": old_deadline,
                 "new_deadline": new_deadline,
+                "reference_note": reference_note,
             },
             ensure_ascii=False,
         ),
@@ -94,6 +96,7 @@ def save_pending_update_task_owner(
     title: str,
     old_owner_name: str,
     new_owner_name: str,
+    reference_note: str = "",
 ) -> PendingAgentAction:
     cancel_pending_actions(db, chat_id)
     pending = PendingAgentAction(
@@ -105,6 +108,7 @@ def save_pending_update_task_owner(
                 "title": title,
                 "old_owner_name": old_owner_name,
                 "new_owner_name": new_owner_name,
+                "reference_note": reference_note,
             },
             ensure_ascii=False,
         ),
