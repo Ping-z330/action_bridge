@@ -15,6 +15,7 @@ from app.services.feishu_event_service import (
     extract_event_dedup_key,
     extract_follow_up_reply,
     extract_forget_command,
+    extract_bind_channel_command,
     extract_help_command,
     extract_memory_command,
     extract_meeting_command,
@@ -44,6 +45,7 @@ class FeishuEventContext:
     remember_command: Any | None = None
     memory_command: Any | None = None
     forget_command: Any | None = None
+    bind_channel_command: Any | None = None
     meeting_command: Any | None = None
     follow_up_reply: Any | None = None
     agent_preparation: AgentTextPreparation | None = None
@@ -59,6 +61,7 @@ class FeishuEventContext:
                 self.remember_command,
                 self.memory_command,
                 self.forget_command,
+                self.bind_channel_command,
                 self.follow_up_reply,
             )
         )
@@ -80,6 +83,7 @@ def parse_feishu_event(payload: dict[str, Any], db: Session) -> FeishuEventConte
     remember_command = extract_remember_command(payload)
     memory_command = extract_memory_command(payload)
     forget_command = extract_forget_command(payload)
+    bind_channel_command = extract_bind_channel_command(payload)
     meeting_command = extract_meeting_command(payload)
     follow_up_reply = extract_follow_up_reply(payload)
 
@@ -93,6 +97,7 @@ def parse_feishu_event(payload: dict[str, Any], db: Session) -> FeishuEventConte
             remember_command,
             memory_command,
             forget_command,
+            bind_channel_command,
             meeting_command,
             follow_up_reply,
         )
@@ -139,6 +144,7 @@ def parse_feishu_event(payload: dict[str, Any], db: Session) -> FeishuEventConte
             remember_command=remember_command,
             memory_command=memory_command,
             forget_command=forget_command,
+            bind_channel_command=bind_channel_command,
             meeting_command=meeting_command,
             follow_up_reply=follow_up_reply,
             agent_preparation=agent_preparation,
@@ -150,6 +156,7 @@ def parse_feishu_event(payload: dict[str, Any], db: Session) -> FeishuEventConte
         remember_command=remember_command,
         memory_command=memory_command,
         forget_command=forget_command,
+        bind_channel_command=bind_channel_command,
         meeting_command=meeting_command,
         follow_up_reply=follow_up_reply,
         agent_preparation=agent_preparation,
@@ -165,6 +172,7 @@ def _get_command_type(
     remember_command: Any | None,
     memory_command: Any | None,
     forget_command: Any | None,
+    bind_channel_command: Any | None,
     meeting_command: Any | None,
     follow_up_reply: Any | None,
     agent_preparation: AgentTextPreparation | None,
@@ -183,6 +191,8 @@ def _get_command_type(
         return "memory"
     if forget_command:
         return "forget"
+    if bind_channel_command:
+        return "bind_channel"
     if meeting_command:
         return "meeting"
     if follow_up_reply:

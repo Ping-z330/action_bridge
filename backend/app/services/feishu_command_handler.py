@@ -15,6 +15,7 @@ from app.services.meeting_service import (
     update_action_item_status,
 )
 from app.services.memory_service import forget_alias, list_memory_aliases, remember_alias
+from app.services.project_channel_service import bind_project_channel, sync_completed_action_item_to_project_channel
 
 
 def handle_fixed_feishu_command(
@@ -27,6 +28,7 @@ def handle_fixed_feishu_command(
     remember_command: Any | None,
     memory_command: Any | None,
     forget_command: Any | None,
+    bind_channel_command: Any | None,
     follow_up_reply: Any | None,
     dedup_key: str | None,
     reply_chat_id: str | None,
@@ -47,6 +49,8 @@ def handle_fixed_feishu_command(
         return _handle_memory_command(db, dedup_key, reply_chat_id, delivery)
     if forget_command:
         return _handle_forget_command(db, forget_command, dedup_key, reply_chat_id, delivery)
+    if bind_channel_command:
+        return _handle_bind_channel_command(db, bind_channel_command, dedup_key, reply_chat_id, delivery)
     if follow_up_reply:
         return _handle_follow_up_reply(db, follow_up_reply, dedup_key, reply_chat_id, delivery)
     return None
@@ -70,6 +74,14 @@ def _handle_done_command(
             action_item.owner_name,
             receive_id=reply_chat_id,
         )
+        synced_receive_id = sync_completed_action_item_to_project_channel(
+            db,
+            action_item_id=action_item.id,
+            title=action_item.title,
+            owner_name=action_item.owner_name,
+            source_receive_id=reply_chat_id,
+            send_completed_notice=delivery.send_action_item_completed_notice,
+        )
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -82,6 +94,7 @@ def _handle_done_command(
     return {
         "status": "completed",
         "action_item_id": action_item.id,
+        "synced_receive_id": synced_receive_id,
         "message": "Action item marked as completed.",
     }
 
@@ -260,6 +273,42 @@ def _handle_forget_command(
     }
 
 
+def _handle_bind_channel_command(
+    db: Session,
+    bind_channel_command: Any,
+    dedup_key: str | None,
+    reply_chat_id: str | None,
+    delivery: FeishuDeliveryPort,
+) -> dict[str, Any]:
+    if not reply_chat_id:
+        mark_feishu_event_finished(db, dedup_key, "failed")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Feishu chat_id is required.")
+
+    item = bind_project_channel(db, bind_channel_command.project_keyword, reply_chat_id)
+    try:
+        delivery.send_pending_action_notice(
+            "✅ 项目群绑定成功",
+            f"项目关键词 `{item.project_keyword}` 已绑定到当前群。之后匹配该项目的任务完成时，会自动同步到这个群。",
+            receive_id=reply_chat_id,
+        )
+    except FeishuDeliveryError as exc:
+        mark_feishu_event_finished(db, dedup_key, "finished")
+        return {
+            "status": "project_channel_bound",
+            "project_keyword": item.project_keyword,
+            "receive_id": item.receive_id,
+            "message": f"Project channel bound, but Feishu notice delivery failed: {exc}",
+        }
+
+    mark_feishu_event_finished(db, dedup_key, "finished")
+    return {
+        "status": "project_channel_bound",
+        "project_keyword": item.project_keyword,
+        "receive_id": item.receive_id,
+        "message": "Project channel bound.",
+    }
+
+
 def _handle_follow_up_reply(
     db: Session,
     follow_up_reply: Any,
@@ -279,6 +328,18 @@ def _handle_follow_up_reply(
     )
     try:
         delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        synced_receive_id = (
+            sync_completed_action_item_to_project_channel(
+                db,
+                action_item_id=action_item.id,
+                title=action_item.title,
+                owner_name=action_item.owner_name,
+                source_receive_id=reply_chat_id,
+                send_completed_notice=delivery.send_action_item_completed_notice,
+            )
+            if action_item.status == "completed"
+            else None
+        )
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -293,5 +354,6 @@ def _handle_follow_up_reply(
         "status": "follow_up_replied",
         "action_item_id": action_item.id,
         "target_status": follow_up_reply.status,
+        "synced_receive_id": synced_receive_id,
         "message": "Follow-up reply handled.",
     }

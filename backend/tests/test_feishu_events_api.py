@@ -100,6 +100,20 @@ def _memory_event(message_id: str = "om_memory_1", chat_id: str = "oc_source") -
     }
 
 
+def _bind_channel_event(text: str, message_id: str = "om_bind_1", chat_id: str = "oc_group") -> dict:
+    return {
+        "header": {"event_id": message_id},
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "message_type": "text",
+                "content": f'{{"text": "{text}"}}',
+            }
+        },
+    }
+
+
 def _forget_event(alias: str, message_id: str = "om_forget_1", chat_id: str = "oc_source") -> dict:
     return {
         "header": {"event_id": message_id},
@@ -478,6 +492,58 @@ def test_feishu_events_remembers_lists_and_forgets_alias(client, monkeypatch) ->
     assert forget_response.status_code == 200
     assert forget_response.json()["status"] == "memory_deleted"
     assert deleted_items[0].alias == "官网"
+
+
+def test_feishu_events_binds_project_channel(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    notices = []
+
+    def fake_notice(title: str, message: str, receive_id: str | None = None) -> str:
+        notices.append((title, message, receive_id))
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_pending_action_notice", fake_notice)
+
+    response = client.post("/api/feishu/events", json=_bind_channel_event("/bind-channel website"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "project_channel_bound"
+    assert response.json()["project_keyword"] == "website"
+    assert response.json()["receive_id"] == "oc_group"
+    assert notices[0][2] == "oc_group"
+
+
+def test_feishu_events_syncs_completed_task_to_bound_project_channel(client, monkeypatch) -> None:
+    import app.api.routes as routes
+
+    monkeypatch.setattr(routes, "send_pending_action_notice", lambda *_args, **_kwargs: "sent")
+    client.post("/api/feishu/events", json=_bind_channel_event("/bind-channel website", message_id="om_bind_website"))
+    create_response = client.post(
+        "/api/meetings",
+        json={
+            "title": "website launch sync",
+            "transcript": "Action: Frontend fixes mobile navigation before Friday.",
+        },
+    )
+    action_item_id = create_response.json()["action_items"][0]["id"]
+    sent_receive_ids: list[str | None] = []
+
+    def fake_send(_action_id: int, _title: str, _owner_name: str, receive_id: str | None = None) -> str:
+        sent_receive_ids.append(receive_id)
+        return "sent"
+
+    monkeypatch.setattr(routes, "send_action_item_completed_notice", fake_send)
+
+    response = client.post(
+        "/api/feishu/events",
+        json=_done_event(action_item_id, message_id="om_done_private", chat_id="oc_private"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["synced_receive_id"] == "oc_group"
+    assert sent_receive_ids == ["oc_private", "oc_group"]
 
 
 def test_feishu_events_sends_single_task_detail(client, monkeypatch) -> None:

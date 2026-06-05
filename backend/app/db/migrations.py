@@ -104,6 +104,24 @@ def run_lightweight_migrations() -> None:
             )
             connection.execute(text("CREATE INDEX ix_agent_trace_logs_id ON agent_trace_logs (id)"))
 
+        if "project_channels" not in table_names:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE project_channels (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        project_keyword VARCHAR(120) NOT NULL UNIQUE,
+                        receive_id VARCHAR(128) NOT NULL,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX ix_project_channels_id ON project_channels (id)"))
+            connection.execute(text("CREATE UNIQUE INDEX ix_project_channels_project_keyword ON project_channels (project_keyword)"))
+            connection.execute(text("CREATE INDEX ix_project_channels_receive_id ON project_channels (receive_id)"))
+
     if "action_items" not in table_names:
         return
 

@@ -26,6 +26,7 @@ from app.services.pending_agent_action_service import (
     save_pending_update_task_owner,
     update_pending_payload,
 )
+from app.services.project_channel_service import sync_completed_action_item_to_project_channel
 
 
 @dataclass(frozen=True)
@@ -671,6 +672,18 @@ def _update_task_status(
 
     try:
         delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
+        synced_receive_id = (
+            sync_completed_action_item_to_project_channel(
+                db,
+                action_item_id=action_item.id,
+                title=action_item.title,
+                owner_name=action_item.owner_name,
+                source_receive_id=reply_chat_id,
+                send_completed_notice=delivery.send_action_item_completed_notice,
+            )
+            if target_status == "completed"
+            else None
+        )
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
@@ -687,6 +700,7 @@ def _update_task_status(
         "intent": agent_response.intent.name,
         "action_item_id": action_item.id,
         "target_status": target_status,
+        "synced_receive_id": synced_receive_id,
         "message": "Task status updated.",
     }
 

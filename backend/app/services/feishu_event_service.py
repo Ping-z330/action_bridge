@@ -47,6 +47,11 @@ class FeishuMemoryCommand:
 
 
 @dataclass(frozen=True)
+class FeishuBindChannelCommand:
+    project_keyword: str
+
+
+@dataclass(frozen=True)
 class FeishuFollowUpReply:
     action_item_id: int
     status: str
@@ -248,6 +253,22 @@ def extract_memory_command(payload: dict[str, Any]) -> FeishuMemoryCommand | Non
         return FeishuMemoryCommand()
 
     return None
+
+
+def extract_bind_channel_command(payload: dict[str, Any]) -> FeishuBindChannelCommand | None:
+    text = _extract_text(payload)
+    if not text:
+        return None
+
+    command_text = text.strip()
+    if not command_text.startswith("/bind-channel"):
+        return None
+
+    project_keyword = command_text.removeprefix("/bind-channel").strip()
+    if not project_keyword:
+        raise ValueError("Invalid /bind-channel command. Expected: /bind-channel <project_keyword>.")
+
+    return FeishuBindChannelCommand(project_keyword=project_keyword)
 
 
 def extract_follow_up_reply(payload: dict[str, Any]) -> FeishuFollowUpReply | None:

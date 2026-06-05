@@ -7,6 +7,7 @@ from app.models.follow_up_log import FollowUpLog
 from app.models.memory_alias import MemoryAlias
 from app.models.meeting import Meeting
 from app.models.pending_agent_action import PendingAgentAction
+from app.models.project_channel import ProjectChannel
 from app.models.task import Task
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "FeishuEventLog",
     "MemoryAlias",
     "PendingAgentAction",
+    "ProjectChannel",
 ]

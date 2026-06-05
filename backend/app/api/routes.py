@@ -236,6 +236,7 @@ def handle_feishu_events(
         remember_command=event.remember_command,
         memory_command=event.memory_command,
         forget_command=event.forget_command,
+        bind_channel_command=event.bind_channel_command,
         follow_up_reply=event.follow_up_reply,
         dedup_key=event.dedup_key,
         reply_chat_id=event.reply_chat_id,

@@ -30,7 +30,7 @@ def test_agent_graph_executes_query_tool(db_session) -> None:
         ),
     )
 
-    state = run_agent_graph_state({"db": db_session, "message": "task"})
+    state = run_agent_graph_state({"db": db_session, "message": "/tasks"})
 
     assert state["intent_route"] == "query_tasks"
     assert [item.id for item in state["tool_items"]] == [meeting.action_items[0].id]

@@ -17,6 +17,7 @@ from app.models.follow_up_log import FollowUpLog
 from app.models.memory_alias import MemoryAlias
 from app.models.meeting import Meeting
 from app.models.pending_agent_action import PendingAgentAction
+from app.models.project_channel import ProjectChannel
 from app.models.task import Task
 
 
@@ -35,6 +36,7 @@ def clean_database() -> Generator[None, None, None]:
         db.query(FeishuEventLog).delete()
         db.query(AgentTraceLog).delete()
         db.query(PendingAgentAction).delete()
+        db.query(ProjectChannel).delete()
         db.query(MemoryAlias).delete()
         db.query(AgentTaskContext).delete()
         db.query(ActionItem).delete()
@@ -47,6 +49,7 @@ def clean_database() -> Generator[None, None, None]:
         db.query(FeishuEventLog).delete()
         db.query(AgentTraceLog).delete()
         db.query(PendingAgentAction).delete()
+        db.query(ProjectChannel).delete()
         db.query(MemoryAlias).delete()
         db.query(AgentTaskContext).delete()
         db.query(ActionItem).delete()
