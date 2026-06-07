@@ -36,20 +36,36 @@ ActionBridge 是一个“会议纪要到执行闭环”的办公协作 Agent MVP
 flowchart TD
     A[会议纪要来源] --> A1[Web 粘贴/上传]
     A --> A2[飞书 /meeting]
+    A --> A3[飞书固定命令]
+    A --> A4[飞书自然语言]
 
     A1 --> B[FastAPI /api/meetings]
     A2 --> C[飞书事件入口 /api/feishu/events]
+    A3 --> C
+    A4 --> C
 
-    C --> C1{事件是否重复}
+    C --> C0[feishu_event_router 解析 payload]
+    C0 --> C00{challenge / ignored?}
+    C00 -->|challenge| C01[返回 challenge]
+    C00 -->|ignored| C02[返回 ignored]
+    C00 -->|继续| C1{事件是否重复}
     C1 -->|是| C2[忽略 duplicated]
-    C1 -->|否| D{固定命令?}
+    C1 -->|否| D{消息类型?}
 
-    D -->|/meeting| B
-    D -->|/tasks /task /done /help /remember /bind-channel| E[命令处理]
-    D -->|普通文本| F0[Memory 别名归一化]
+    D -->|/meeting| BG[后台创建会议]
+    BG --> B
+    D -->|/tasks /task /done /help /remember /memory /forget /bind-channel| E[feishu_command_handler 固定命令处理]
+    D -->|跟进回复 #12 完成/进行中/有风险| E
+    D -->|普通文本| G0[feishu_event_guard 判断是否处理]
+
+    G0 --> P0{是否有待确认操作?}
+    P0 -->|确认/取消| P1[orchestrator 执行或取消 Pending Action]
+    P0 -->|修改待确认字段| P2[更新 Pending Payload 并重发确认卡片]
+    P0 -->|普通自然语言| F0[Memory 别名归一化]
+
     F0 --> F[规则意图识别]
     F --> FLLM{规则是否识别?}
-    FLLM -->|是| FR[结构化意图路由]
+    FLLM -->|是| FR[LangGraph 结构化意图路由]
     FLLM -->|否| FLLM2[LLM 意图兜底]
     FLLM2 --> FR
 
@@ -62,27 +78,38 @@ flowchart TD
     G2 --> H
     G3 --> H
 
-    FR --> F1[查询任务]
+    FR --> F1[查询任务 / 最近任务上下文]
     FR --> F2[更新任务状态]
     FR --> F3[总结项目进度]
     FR --> F4[帮助说明]
     FR --> F5[创建任务]
+    FR --> F6[修改负责人/截止时间]
+
+    F5 --> P3[保存 Pending Create]
+    F6 --> P4[保存 Pending Update]
+    P3 --> L
+    P4 --> L
+    P1 --> H
+    P2 --> L
 
     E --> H
     F1 --> H
     F2 --> H
     F3 --> H
-    F5 --> H
 
     H --> I[Web 首页/详情页]
     H --> J[任务结果页 /tasks]
     H --> K[历史记录页 /history]
     H --> L[飞书卡片回复]
 
-    H --> M[自动跟进扫描]
+    H --> M[auto_follow_up_scheduler 定时触发]
+    M --> M1[follow_up_service 扫描今日到期/逾期任务]
+    M1 --> L
     M --> L
     L --> N[用户回复完成/进行中/有风险]
     N --> H
+    H --> PC[project_channel_service 项目群绑定同步]
+    PC --> L
 ```
 
 ## 页面说明
@@ -106,29 +133,42 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph Frontend[Next.js 前端]
+        F0[AppShell 导航壳]
         F1[MeetingForm]
         F2[MeetingDetail]
         F3[TaskResults]
         F4[HistoryRecords]
-        F5[lib/api.ts]
+        F5[AgentDebugPanel]
+        F6[lib/api.ts / lib/types.ts]
     end
 
     subgraph Backend[FastAPI 后端]
-        B1[routes.py]
-        B2[meeting_service.py]
-        B3[parser_service.py]
-        B4[feishu_event_service.py]
-        B5[feishu_service.py]
-        B6[follow_up_service.py]
+        B1[api/routes.py 路由入口]
+        B2[meeting_service 会议与行动项]
+        B3[parser_service 会议解析]
+        B4[feishu_event_service Payload 提取]
+        B5[feishu_event_router 事件分流]
+        B6[feishu_command_handler 固定命令]
+        B7[feishu_event_guard 处理范围判断]
+        B8[feishu_delivery / feishu_service 飞书发送]
+        B9[follow_up_service / auto_follow_up_scheduler 跟进提醒]
+        B10[deadline_service / due_status_service 时间与风险]
+        B11[project_channel_service 项目群绑定]
     end
 
     subgraph Agent[轻量 Agent]
         A1[agent/graph.py LangGraph 执行流]
-        A2[agent/service.py 意图识别]
-        A3[agent/tool_registry.py 工具注册表]
-        A4[agent/tools.py 工具执行]
-        A5[memory_service.py 别名记忆]
-        A6[agent_trace_service.py Trace 记录]
+        A2[agent/orchestrator.py 飞书 Agent 编排]
+        A3[agent/service.py 规则意图识别]
+        A4[agent/llm_intent_service.py LLM 意图兜底]
+        A5[agent/task_reference_resolver.py 任务引用解析]
+        A6[agent/tool_registry.py 工具注册表]
+        A7[agent/tools.py 工具执行]
+        A8[agent/confirmed_intents.py 确认后执行]
+        A9[pending_agent_action_service Pending 确认]
+        A10[memory_service.py 结构化 Memory]
+        A11[agent_task_context_service 最近任务上下文]
+        A12[agent_trace_service Trace 记录]
     end
 
     subgraph DB[SQLite 数据库]
@@ -137,6 +177,11 @@ flowchart TD
         D3[tasks]
         D4[follow_up_logs]
         D5[feishu_event_logs]
+        D6[memory_aliases]
+        D7[pending_agent_actions]
+        D8[agent_trace_logs]
+        D9[agent_task_contexts]
+        D10[project_channels]
     end
 
     subgraph External[外部服务]
@@ -145,35 +190,58 @@ flowchart TD
         E3[Feishu Webhook]
     end
 
-    F1 --> F5
-    F2 --> F5
-    F3 --> F5
-    F4 --> F5
-    F5 --> B1
+    F0 --> F6
+    F1 --> F6
+    F2 --> F6
+    F3 --> F6
+    F4 --> F6
+    F5 --> F6
+    F6 --> B1
 
     B1 --> B2
-    B1 --> B4
-    B1 --> A1
-    B1 --> A5
-    A1 --> A2
-    A2 --> A3
-    A3 --> A4
-    A4 --> B2
+    B1 --> B5
+    B5 --> B4
+    B5 --> B7
+    B5 --> B6
+    B5 --> A2
+    B6 --> B2
+    B6 --> B8
+    A2 --> A1
+    A1 --> A3
+    A1 --> A4
+    A1 --> A5
     A1 --> A6
+    A6 --> A7
+    A7 --> B2
+    A2 --> A8
+    A2 --> A9
+    A2 --> A10
+    A2 --> A11
+    A1 --> A12
 
     B2 --> B3
-    B2 --> B5
-    B6 --> B5
+    B2 --> B8
+    B2 --> B10
+    B9 --> B8
+    B9 --> B10
+    B6 --> B11
+    B11 --> B8
 
     B3 --> E1
-    B5 --> E2
-    B5 --> E3
+    A4 --> E1
+    B8 --> E2
+    B8 --> E3
 
     B2 --> D1
     B2 --> D2
     B2 --> D3
-    B6 --> D4
-    B4 --> D5
+    B9 --> D4
+    B5 --> D5
+    A10 --> D6
+    A9 --> D7
+    A12 --> D8
+    A11 --> D9
+    B11 --> D10
 ```
 
 ## 代码结构
@@ -183,9 +251,13 @@ ActionBridge/
   backend/
     app/
       agent/
+        confirmed_intents.py          用户确认后真正执行创建/修改任务
         graph.py                     LangGraph Agent 执行流
         orchestrator.py              飞书 Agent 回复编排与确认机制
         service.py                   轻量 Agent 意图识别与编排
+        llm_intent_service.py         LLM 意图识别兜底
+        task_reference_resolver.py    解析“第一个任务/12 号任务”等引用
+        response_builder.py           Agent 回复文案构造
         tool_registry.py             Agent 工具注册表
         tool_adapters.py             本地工具适配器，预留 MCP/外部工具接入形态
         tool_contracts.py            AgentTool / AgentToolRegistry 契约
@@ -197,15 +269,26 @@ ActionBridge/
       db/session.py                  数据库连接
       db/base.py                     模型注册
       db/migrations.py               SQLite 轻量迁移
-      models/                        SQLAlchemy 数据模型
-      schemas/                       请求/响应结构
-      services/parser_service.py     LLM/规则解析会议纪要
-      services/meeting_service.py    会议、行动项、飞书发送业务逻辑
-      services/feishu_event_service.py 飞书消息事件解析
-      services/feishu_service.py     飞书卡片生成与发送
-      services/memory_service.py     结构化 Memory 别名管理
-      services/follow_up_service.py  未完成任务扫描与提醒
+      models/                        SQLAlchemy 数据模型（会议、行动项、Trace、Memory、Pending、项目群绑定等）
+      schemas/                       请求/响应结构（会议、任务、行动项、Trace、Memory、跟进等）
+      services/agent_task_context_service.py 最近任务上下文，用于“第一个/第二个任务”引用
       services/agent_trace_service.py Agent Trace 记录与查询
+      services/auto_follow_up_scheduler.py 自动跟进定时调度
+      services/deadline_service.py   截止时间解析、标准化和展示文本
+      services/due_status_service.py 到期状态/风险判断
+      services/feishu_command_handler.py 飞书固定命令处理
+      services/feishu_delivery.py    飞书发送能力封装工具箱
+      services/feishu_event_guard.py 飞书消息处理范围判断与过滤
+      services/feishu_event_log_service.py 飞书事件去重和处理状态记录
+      services/feishu_event_router.py 飞书事件解析、分类和分流
+      services/feishu_event_service.py 飞书 payload 字段提取和命令解析
+      services/feishu_service.py     飞书卡片生成与发送
+      services/follow_up_service.py  未完成任务扫描、提醒和回复记录
+      services/meeting_service.py    会议、行动项、飞书发送业务逻辑
+      services/memory_service.py     结构化 Memory 别名管理
+      services/parser_service.py     LLM/规则解析会议纪要
+      services/pending_agent_action_service.py Agent 待确认操作管理
+      services/project_channel_service.py 项目关键词与飞书群绑定/同步
     tests/                           后端自动化测试
   frontend/
     app/page.tsx                     首页会议处理
@@ -213,7 +296,13 @@ ActionBridge/
     app/history/page.tsx             历史记录页
     app/meetings/[id]/page.tsx       会议详情页
     app/agent-debug/page.tsx         Agent 调试面板
-    components/                      页面组件
+    components/AppShell.tsx          全局导航与页面壳
+    components/MeetingForm.tsx       会议输入表单和文件上传
+    components/MeetingDetail.tsx     会议详情与行动项编辑
+    components/TaskResults.tsx       任务结果页看板
+    components/HistoryRecords.tsx    历史记录统计
+    components/AgentDebugPanel.tsx   Agent Trace 与手动运行面板
+    components/MeetingList.tsx       会议列表组件
     lib/api.ts                       前端 API 请求
     lib/types.ts                     TypeScript 类型
     styles/                          页面样式

@@ -1,5 +1,7 @@
 from collections.abc import Generator
 
+# 数据库会话和模型基类的定义，使用 SQLAlchemy 来管理数据库连接和会话，以及定义数据库模型的基类；
+# 同时配置了 SQLite 数据库的连接参数和一些性能优化的 PRAGMA 设置，以提高数据库的并发性能和稳定性。
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 

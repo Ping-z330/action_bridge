@@ -1,13 +1,22 @@
+# 这个文件负责处理“固定格式”的飞书命令。
+# 常见例子：
+# - /done 12：把 12 号任务标记为完成。
+# - /task 12：查看 12 号任务详情。
+# - /tasks：查看当前未完成任务列表。
+# - /help：查看机器人帮助。
+# - /remember、/memory、/forget：管理记忆别名。
+# 如果消息不是固定命令，routes.py 会继续交给 Agent 自然语言流程处理。
+
 from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import send_task_not_found_response
+from app.services.agent_task_context_service import save_recent_task_context
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
 from app.services.feishu_service import FeishuDeliveryError
-from app.services.agent_task_context_service import save_recent_task_context
 from app.services.follow_up_service import record_follow_up_reply
 from app.services.meeting_service import (
     complete_action_item,
@@ -18,6 +27,9 @@ from app.services.memory_service import forget_alias, list_memory_aliases, remem
 from app.services.project_channel_service import bind_project_channel, sync_completed_action_item_to_project_channel
 
 
+# 固定飞书命令的统一入口。
+# 它接收 feishu_event_router.py 解析好的命令对象，
+# 然后分发给下面对应的私有处理函数。
 def handle_fixed_feishu_command(
     db: Session,
     *,
@@ -34,7 +46,11 @@ def handle_fixed_feishu_command(
     reply_chat_id: str | None,
     delivery: FeishuDeliveryPort | None = None,
 ) -> dict[str, Any] | None:
+    # delivery 是“飞书发送工具箱”。
+    # 测试时可以传入假的 delivery，避免真的往飞书发消息。
     delivery = delivery or get_default_feishu_delivery()
+
+    # 命令处理优先级：先处理明确的写操作，再处理查询和帮助类命令。
     if done_command:
         return _handle_done_command(db, done_command, dedup_key, reply_chat_id, delivery)
     if task_command:
@@ -56,6 +72,9 @@ def handle_fixed_feishu_command(
     return None
 
 
+# 处理 /done <任务ID>。
+# 它会更新数据库中的任务状态，发送完成通知，
+# 如果任务命中了已绑定的项目群，还会同步一份完成通知过去。
 def _handle_done_command(
     db: Session,
     done_command: Any,
@@ -68,12 +87,15 @@ def _handle_done_command(
         return send_task_not_found_response(done_command.action_item_id, dedup_key, reply_chat_id, db, delivery)
 
     try:
+        # 先回复触发命令的当前会话。
         delivery.send_action_item_completed_notice(
             action_item.id,
             action_item.title,
             action_item.owner_name,
             receive_id=reply_chat_id,
         )
+
+        # 如果这个任务匹配了某个已绑定项目群，也同步通知到那个群。
         synced_receive_id = sync_completed_action_item_to_project_channel(
             db,
             action_item_id=action_item.id,
@@ -83,6 +105,7 @@ def _handle_done_command(
             send_completed_notice=delivery.send_action_item_completed_notice,
         )
     except FeishuDeliveryError as exc:
+        # 数据库更新已经成功；即使飞书通知失败，也返回 completed。
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "completed",
@@ -99,6 +122,8 @@ def _handle_done_command(
     }
 
 
+# 处理 /task <任务ID>。
+# 它会查找单个任务，并把任务详情卡片发回飞书。
 def _handle_task_command(
     db: Session,
     task_command: Any,
@@ -131,6 +156,9 @@ def _handle_task_command(
     }
 
 
+# 处理 /tasks。
+# 它会列出未完成任务，并保存最近任务上下文。
+# 这样用户后续说“第一个任务”“第二个任务”时，Agent 更容易理解指代。
 def _handle_tasks_command(
     db: Session,
     tasks_command: Any,
@@ -163,6 +191,7 @@ def _handle_tasks_command(
     }
 
 
+# 处理 /help。
 def _handle_help_command(
     db: Session,
     dedup_key: str | None,
@@ -185,6 +214,8 @@ def _handle_help_command(
     }
 
 
+# 处理 /remember <别名> = <标准名称>。
+# 它会保存结构化记忆别名，例如“官网” = “官网改版”。
 def _handle_remember_command(
     db: Session,
     remember_command: Any,
@@ -218,6 +249,8 @@ def _handle_remember_command(
     }
 
 
+# 处理 /memory。
+# 它会列出当前所有记忆别名。
 def _handle_memory_command(
     db: Session,
     dedup_key: str | None,
@@ -243,6 +276,8 @@ def _handle_memory_command(
     }
 
 
+# 处理 /forget <别名>。
+# 它会删除一个记忆别名。
 def _handle_forget_command(
     db: Session,
     forget_command: Any,
@@ -273,6 +308,9 @@ def _handle_forget_command(
     }
 
 
+# 处理项目群绑定命令。
+# 它会把某个项目关键词和当前飞书群绑定起来。
+# 后续该项目相关任务完成时，可以自动同步通知到这个群。
 def _handle_bind_channel_command(
     db: Session,
     bind_channel_command: Any,
@@ -287,8 +325,11 @@ def _handle_bind_channel_command(
     item = bind_project_channel(db, bind_channel_command.project_keyword, reply_chat_id)
     try:
         delivery.send_pending_action_notice(
-            "✅ 项目群绑定成功",
-            f"项目关键词 `{item.project_keyword}` 已绑定到当前群。之后匹配该项目的任务完成时，会自动同步到这个群。",
+            "Project channel bound",
+            (
+                f"Project keyword `{item.project_keyword}` is bound to this chat. "
+                "Completed matching tasks will be synced here."
+            ),
             receive_id=reply_chat_id,
         )
     except FeishuDeliveryError as exc:
@@ -309,6 +350,8 @@ def _handle_bind_channel_command(
     }
 
 
+# 处理用户对跟进提醒的回复。
+# 例如用户收到提醒后回复“完成了 #12”或“#12 有风险”。
 def _handle_follow_up_reply(
     db: Session,
     follow_up_reply: Any,
@@ -327,7 +370,10 @@ def _handle_follow_up_reply(
         status=follow_up_reply.status,
     )
     try:
+        # 发送任务最新详情，让用户确认状态已经更新。
         delivery.send_task_detail_summary(action_item, receive_id=reply_chat_id)
+
+        # 如果任务变成 completed，也同步完成通知到已绑定的项目群。
         synced_receive_id = (
             sync_completed_action_item_to_project_channel(
                 db,

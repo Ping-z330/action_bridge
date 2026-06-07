@@ -1,3 +1,13 @@
+"""Feishu message delivery and interactive-card builders.
+
+这个文件主要做两件事：
+1. 对外提供 `send_xxx` 函数，让业务代码发送不同类型的飞书卡片。
+2. 在内部把业务数据组装成飞书 interactive card payload，并选择应用机器人或 webhook 投递。
+
+阅读顺序建议：先看顶部的 `send_xxx` 入口函数，再看 `_deliver_card_payload`，
+最后按需要查看对应的 `_build_xxx_payload` 卡片构造函数。
+"""
+
 import json
 from typing import Any, Iterable
 
@@ -12,51 +22,72 @@ from app.services.due_status_service import get_due_status, get_due_status_label
 
 
 class FeishuDeliveryError(Exception):
+    """飞书消息投递失败时抛出的统一异常。"""
+
     pass
 
 
+# Public send functions -----------------------------------------------------
+# 这些函数是本文件对外暴露的主要入口。
+# 调用方通常不需要知道飞书卡片 JSON 怎么拼，只需要传入业务对象。
+
 def send_meeting_summary(meeting: MeetingResponse, receive_id: str | None = None) -> str:
+    """发送会议摘要卡片。"""
+
     payload = _build_meeting_card_payload(meeting)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "会议摘要卡片已发送到飞书。"
 
 
 def send_follow_up_summary(meeting: MeetingResponse, receive_id: str | None = None) -> str:
+    """发送某个会议的待跟进任务提醒卡片。"""
+
     payload = _build_follow_up_card_payload(meeting)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "跟进提醒卡片已发送到飞书。"
 
 
+# 发送任务相关的消息函数，这些函数会构建对应的卡片内容并发送到飞书，比如任务完成通知、任务详情、任务创建确认等
 def send_action_item_completed_notice(
     action_item_id: int,
     title: str,
     owner_name: str,
     receive_id: str | None = None,
 ) -> str:
+    """发送任务已完成通知。"""
+
     payload = _build_action_item_completed_payload(action_item_id, title, owner_name)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "行动项完成通知已发送到飞书。"
 
 
 def send_open_tasks_summary(items: Iterable[ActionItemListItem], receive_id: str | None = None) -> str:
+    """发送未完成任务列表，常用于 `/tasks` 查询结果。"""
+
     payload = _build_open_tasks_payload(items)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "未完成任务列表已发送到飞书。"
 
 
 def send_task_detail_summary(item: ActionItemListItem, receive_id: str | None = None) -> str:
+    """发送单个任务详情，常用于 `/task 任务ID` 查询结果。"""
+
     payload = _build_task_detail_payload(item)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务详情卡片已发送到飞书。"
 
 
 def send_task_not_found_notice(action_item_id: int, receive_id: str | None = None) -> str:
+    """任务 ID 找不到时发送提示卡片。"""
+
     payload = _build_task_not_found_payload(action_item_id)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务不存在提示卡片已发送到飞书。"
 
 
 def send_task_create_clarification(message: str, receive_id: str | None = None) -> str:
+    """创建任务信息不完整时，请用户补充说明。"""
+
     payload = _build_task_create_clarification_payload(message)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务创建补充信息提示已发送到飞书。"
@@ -68,6 +99,8 @@ def send_task_create_confirmation(
     deadline: str,
     receive_id: str | None = None,
 ) -> str:
+    """自然语言创建任务前，发送确认卡片。"""
+
     payload = _build_task_create_confirmation_payload(title, owner_name, deadline)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "任务创建确认卡片已发送到飞书。"
@@ -81,6 +114,8 @@ def send_task_deadline_update_confirmation(
     receive_id: str | None = None,
     reference_note: str = "",
 ) -> str:
+    """修改任务截止时间前，发送确认卡片。"""
+
     payload = _build_task_deadline_update_confirmation_payload(
         action_item_id,
         title,
@@ -100,6 +135,8 @@ def send_task_owner_update_confirmation(
     receive_id: str | None = None,
     reference_note: str = "",
 ) -> str:
+    """修改任务负责人前，发送确认卡片。"""
+
     payload = _build_task_owner_update_confirmation_payload(
         action_item_id,
         title,
@@ -112,42 +149,57 @@ def send_task_owner_update_confirmation(
 
 
 def send_pending_action_notice(title: str, message: str, receive_id: str | None = None) -> str:
+    """发送通用的“等待确认/无法直接执行”提示。"""
+
     payload = _build_pending_action_notice_payload(title, message)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "待确认操作提示已发送到飞书。"
 
 
 def send_project_progress_summary(summary: ProjectProgressSummary, receive_id: str | None = None) -> str:
+    """发送项目进度总结卡片。"""
+
     payload = _build_project_progress_payload(summary)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "项目进度总结卡片已发送到飞书。"
 
 
 def send_help_card(receive_id: str | None = None) -> str:
+    """发送帮助卡片，展示飞书机器人支持的命令。"""
+
     payload = _build_help_card_payload()
     _deliver_card_payload(payload, receive_id=receive_id)
     return "帮助卡片已发送到飞书。"
 
 
 def send_memory_saved_notice(item: MemoryAliasItem, receive_id: str | None = None) -> str:
+    """Memory 别名保存成功后发送通知。"""
+
     payload = _build_memory_saved_payload(item)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "Memory saved notice sent to Feishu."
 
 
 def send_memory_deleted_notice(item: MemoryAliasItem, receive_id: str | None = None) -> str:
+    """Memory 别名删除成功后发送通知。"""
+
     payload = _build_memory_deleted_payload(item)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "Memory deleted notice sent to Feishu."
 
 
 def send_memory_list_summary(items: Iterable[MemoryAliasItem], receive_id: str | None = None) -> str:
+    """发送当前 Memory 别名列表。"""
+
     payload = _build_memory_list_payload(items)
     _deliver_card_payload(payload, receive_id=receive_id)
     return "Memory list sent to Feishu."
 
 
 def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, str | None]:
+    """从飞书卡片回调 payload 中解析任务 ID 和动作类型。"""
+
+    # 飞书不同类型的回调结构不完全一样，这里按常见位置依次尝试取 value。
     value = (
         payload.get("action", {}).get("value")
         or payload.get("event", {}).get("action", {}).get("value")
@@ -166,7 +218,14 @@ def extract_card_callback_action(payload: dict[str, Any]) -> tuple[int | None, s
     return parsed_id, action
 
 
+# Delivery helpers ----------------------------------------------------------
+# 投递逻辑集中在这里：
+# - 如果配置了飞书自建应用机器人，就用 app bot API 发送 interactive card。
+# - 否则退回到 webhook 机器人发送。
+
 def _deliver_card_payload(payload: dict[str, Any], receive_id: str | None = None) -> None:
+    """选择可用的飞书投递方式，并发送卡片。"""
+
     if _is_app_bot_configured(receive_id):
         _post_app_bot_card(payload["card"], receive_id=receive_id)
         return
@@ -176,17 +235,23 @@ def _deliver_card_payload(payload: dict[str, Any], receive_id: str | None = None
 
 
 def _is_app_bot_configured(receive_id: str | None = None) -> bool:
+    """检查自建应用机器人所需的 app id、secret、目标会话是否都已配置。"""
+
     target_receive_id = receive_id or FEISHU_DEFAULT_CHAT_ID
     values = [FEISHU_APP_ID, FEISHU_APP_SECRET, target_receive_id]
     return all(value and not value.startswith("replace_with_") for value in values)
 
 
 def _ensure_webhook_configured() -> None:
+    """当走 webhook 发送时，提前检查 webhook URL 是否可用。"""
+
     if not FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL.startswith("replace_with_"):
         raise FeishuDeliveryError("FEISHU_WEBHOOK_URL is not configured")
 
 
 def _post_webhook_payload(payload: dict[str, Any]) -> None:
+    """通过飞书 webhook 机器人发送完整 payload。"""
+
     try:
         response = httpx.post(FEISHU_WEBHOOK_URL, json=payload, timeout=10.0)
         response.raise_for_status()
@@ -195,6 +260,8 @@ def _post_webhook_payload(payload: dict[str, Any]) -> None:
 
 
 def _post_app_bot_card(card: dict[str, Any], receive_id: str | None = None) -> None:
+    """通过飞书自建应用机器人发送 interactive card。"""
+
     token = _get_tenant_access_token()
     target_receive_id = receive_id or FEISHU_DEFAULT_CHAT_ID
     if not target_receive_id:
@@ -224,6 +291,8 @@ def _post_app_bot_card(card: dict[str, Any], receive_id: str | None = None) -> N
 
 
 def _get_tenant_access_token() -> str:
+    """获取调用飞书自建应用消息 API 所需的 tenant_access_token。"""
+
     try:
         response = httpx.post(
             "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
@@ -242,7 +311,14 @@ def _get_tenant_access_token() -> str:
     return token
 
 
+# Card payload builders -----------------------------------------------------
+# 下面的 `_build_xxx_payload` 函数只负责拼飞书卡片 JSON，不负责发送。
+# 飞书 interactive card 的基本形状通常是：
+# {"msg_type": "interactive", "card": {"schema": "2.0", "header": ..., "body": ...}}
+
 def _build_meeting_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
+    """构造会议摘要卡片。"""
+
     elements = [
         _markdown_block(_build_meeting_status_section(meeting)),
         _divider(),
@@ -274,6 +350,8 @@ def _build_meeting_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
 
 
 def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
+    """构造跟进提醒卡片，只展示 pending/in_progress 的行动项。"""
+
     unfinished_items = [item for item in meeting.action_items if item.status in {"pending", "in_progress"}]
 
     if unfinished_items:
@@ -308,6 +386,8 @@ def _build_follow_up_card_payload(meeting: MeetingResponse) -> dict[str, Any]:
 
 
 def _build_action_item_completed_payload(action_item_id: int, title: str, owner_name: str) -> dict[str, Any]:
+    """构造任务完成通知卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -332,6 +412,8 @@ def _build_action_item_completed_payload(action_item_id: int, title: str, owner_
 
 
 def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, Any]:
+    """构造任务列表卡片，并根据逾期/今日到期情况选择卡片颜色。"""
+
     raw_items = list(items)
     completed_only = bool(raw_items) and all(item.status == "completed" for item in raw_items)
     materialized = raw_items if completed_only else [item for item in raw_items if item.status != "completed"]
@@ -380,6 +462,8 @@ def _build_open_tasks_payload(items: Iterable[ActionItemListItem]) -> dict[str, 
 
 
 def _build_task_detail_payload(item: ActionItemListItem) -> dict[str, Any]:
+    """构造单个任务详情卡片。"""
+
     title = _normalize_action_title(item.title, item.owner_name)
     due_status = item.due_status or get_due_status(item.deadline)
     due_label = item.due_status_label or get_due_status_label(due_status)
@@ -420,6 +504,8 @@ def _build_task_detail_payload(item: ActionItemListItem) -> dict[str, Any]:
 
 
 def _build_task_not_found_payload(action_item_id: int) -> dict[str, Any]:
+    """构造任务不存在提示卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -451,6 +537,8 @@ def _build_task_not_found_payload(action_item_id: int) -> dict[str, Any]:
 
 
 def _build_task_create_clarification_payload(message: str) -> dict[str, Any]:
+    """构造任务创建信息待补充卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -481,6 +569,8 @@ def _build_task_create_clarification_payload(message: str) -> dict[str, Any]:
 
 
 def _build_task_create_confirmation_payload(title: str, owner_name: str, deadline: str) -> dict[str, Any]:
+    """构造任务创建确认卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -512,6 +602,8 @@ def _build_task_deadline_update_confirmation_payload(
     new_deadline: str,
     reference_note: str = "",
 ) -> dict[str, Any]:
+    """构造修改截止时间确认卡片。"""
+
     elements = [
         _markdown_block(f"**任务**\n{title}"),
         _markdown_block(f"**原截止时间**\n{old_deadline or '未设置'}"),
@@ -538,6 +630,8 @@ def _build_task_owner_update_confirmation_payload(
     new_owner_name: str,
     reference_note: str = "",
 ) -> dict[str, Any]:
+    """构造修改负责人确认卡片。"""
+
     elements = [
         _markdown_block(f"**任务**\n{title}"),
         _markdown_block(f"**原负责人**\n{old_owner_name or '未设置'}"),
@@ -558,6 +652,8 @@ def _build_task_owner_update_confirmation_payload(
 
 
 def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, Any]:
+    """构造通用待确认提示卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -577,6 +673,8 @@ def _build_pending_action_notice_payload(title: str, message: str) -> dict[str, 
 
 
 def _build_task_update_confirmation_payload(header_title: str, elements: list[dict[str, Any]]) -> dict[str, Any]:
+    """任务修改确认卡片的公共外壳。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -596,6 +694,8 @@ def _build_task_update_confirmation_payload(header_title: str, elements: list[di
 
 
 def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str, Any]:
+    """构造项目进度卡片，并根据风险选择红/橙/绿/蓝模板。"""
+
     template = (
         "red"
         if summary.failed_count or summary.overdue_count
@@ -631,6 +731,8 @@ def _build_project_progress_payload(summary: ProjectProgressSummary) -> dict[str
 
 
 def _build_help_card_payload() -> dict[str, Any]:
+    """构造帮助卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -712,6 +814,8 @@ def _build_help_card_payload() -> dict[str, Any]:
 
 
 def _build_memory_saved_payload(item: MemoryAliasItem) -> dict[str, Any]:
+    """构造 Memory 保存成功卡片。"""
+
     return _build_simple_memory_payload(
         title="🧠 已记住",
         template="green",
@@ -725,6 +829,8 @@ def _build_memory_saved_payload(item: MemoryAliasItem) -> dict[str, Any]:
 
 
 def _build_memory_deleted_payload(item: MemoryAliasItem) -> dict[str, Any]:
+    """构造 Memory 删除成功卡片。"""
+
     return _build_simple_memory_payload(
         title="🧹 已忘记",
         template="orange",
@@ -736,6 +842,8 @@ def _build_memory_deleted_payload(item: MemoryAliasItem) -> dict[str, Any]:
 
 
 def _build_memory_list_payload(items: Iterable[MemoryAliasItem]) -> dict[str, Any]:
+    """构造 Memory 列表卡片。"""
+
     materialized = list(items)
     if materialized:
         lines = [
@@ -755,6 +863,8 @@ def _build_memory_list_payload(items: Iterable[MemoryAliasItem]) -> dict[str, An
 
 
 def _build_simple_memory_payload(title: str, template: str, lines: list[str]) -> dict[str, Any]:
+    """构造只有一个 markdown 区块的 Memory 卡片。"""
+
     return {
         "msg_type": "interactive",
         "card": {
@@ -774,6 +884,8 @@ def _build_simple_memory_payload(title: str, template: str, lines: list[str]) ->
 
 
 def _build_open_task_elements(items: Iterable[ActionItemListItem]) -> list[dict[str, Any]]:
+    """构造较详细的任务元素列表，保留给需要逐字段展示的卡片布局。"""
+
     elements: list[dict[str, Any]] = []
 
     for item in items:
@@ -798,6 +910,8 @@ def _build_open_task_elements(items: Iterable[ActionItemListItem]) -> list[dict[
 
 
 def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dict[str, Any]]:
+    """构造会议行动项元素列表，保留给较详细的会议卡片布局。"""
+
     elements: list[dict[str, Any]] = []
 
     for item in items:
@@ -818,7 +932,13 @@ def _build_action_item_elements(items: Iterable[ActionItemResponse]) -> list[dic
     return elements
 
 
+# Text section builders -----------------------------------------------------
+# 这些函数把会议、任务、进度等业务对象转换成 markdown 字符串，
+# 再交给 `_markdown_block` 包装成飞书卡片元素。
+
 def _build_meeting_status_section(meeting: MeetingResponse) -> str:
+    """从原始会议记录中提取“当前状态”段落；没有就用摘要兜底。"""
+
     status_lines = _extract_section_lines(meeting.raw_transcript, ("当前状态",), ("已确认决策", "待办事项", "后续跟进"))
     if not status_lines:
         status_lines = [meeting.summary] if meeting.summary else []
@@ -826,6 +946,8 @@ def _build_meeting_status_section(meeting: MeetingResponse) -> str:
 
 
 def _build_meeting_decision_section(decisions: Iterable[str]) -> str:
+    """把关键决策列表格式化成飞书 markdown。"""
+
     materialized = [decision.strip() for decision in decisions if decision.strip()]
     if not materialized:
         return "**✅ 已确认决策**\n· 暂无明确决策"
@@ -834,6 +956,8 @@ def _build_meeting_decision_section(decisions: Iterable[str]) -> str:
 
 
 def _build_meeting_action_items_section(items: Iterable[ActionItemResponse]) -> str:
+    """把行动项列表格式化成飞书 markdown。"""
+
     materialized = list(items)
     if not materialized:
         return "**📋 待办事项**\n· 暂无待办事项"
@@ -849,6 +973,8 @@ def _build_meeting_action_items_section(items: Iterable[ActionItemResponse]) -> 
 
 
 def _build_meeting_follow_up_section(transcript: str) -> str:
+    """从会议原文中提取“后续跟进”段落。"""
+
     follow_up_lines = _extract_section_lines(transcript, ("后续跟进",), ("风险", "提醒", "⚠", "待办事项"))
     if not follow_up_lines:
         return ""
@@ -856,6 +982,8 @@ def _build_meeting_follow_up_section(transcript: str) -> str:
 
 
 def _build_meeting_risk_notice(meeting: MeetingResponse) -> str:
+    """构造会议卡片底部的风险提醒。"""
+
     warning_lines = _extract_warning_lines(meeting.raw_transcript)
     if warning_lines:
         return "\n".join([f"> ⚠️ {line}" for line in warning_lines])
@@ -867,6 +995,8 @@ def _build_meeting_risk_notice(meeting: MeetingResponse) -> str:
 
 
 def _build_project_progress_overview(summary: ProjectProgressSummary) -> str:
+    """构造项目进度指标总览。"""
+
     return "\n".join(
         [
             f"**完成率：{summary.completion_rate}%**",
@@ -880,6 +1010,8 @@ def _build_project_progress_overview(summary: ProjectProgressSummary) -> str:
 
 
 def _build_project_progress_items(items: Iterable[ActionItemListItem]) -> str:
+    """构造项目进度卡片里的重点任务列表。"""
+
     materialized = list(items)
     if not materialized:
         return "**📋 重点任务**\n· 暂无相关任务"
@@ -902,6 +1034,8 @@ def _build_open_tasks_overview(
     *,
     label: str = "当前未完成任务",
 ) -> str:
+    """构造任务列表卡片的统计总览。"""
+
     return "\n".join(
         [
             f"**{label}：{total_count} 项**",
@@ -911,6 +1045,8 @@ def _build_open_tasks_overview(
 
 
 def _build_open_tasks_compact_items(items: Iterable[ActionItemListItem]) -> str:
+    """构造任务列表卡片中的紧凑任务行。"""
+
     materialized = list(items)
     if not materialized:
         return "**📋 任务清单**\n· 暂无未完成任务"
@@ -918,6 +1054,8 @@ def _build_open_tasks_compact_items(items: Iterable[ActionItemListItem]) -> str:
 
 
 def _build_follow_up_overview(items: Iterable[ActionItemResponse]) -> str:
+    """构造跟进提醒卡片的任务数量说明。"""
+
     materialized = list(items)
     return "\n".join(
         [
@@ -928,6 +1066,8 @@ def _build_follow_up_overview(items: Iterable[ActionItemResponse]) -> str:
 
 
 def _build_follow_up_items(items: Iterable[ActionItemResponse]) -> str:
+    """构造跟进提醒卡片中的任务清单。"""
+
     materialized = list(items)
     if not materialized:
         return "**📋 跟进清单**\n· 暂无待跟进行动项"
@@ -940,6 +1080,8 @@ def _build_follow_up_items(items: Iterable[ActionItemResponse]) -> str:
 
 
 def _format_compact_task_item(item: ActionItemListItem) -> str:
+    """把一个任务格式化成单行文本，并加上风险前缀。"""
+
     risk_prefix = "🚨" if item.due_status == "overdue" else "⏰" if item.due_status == "due_today" else "📌"
     title = _normalize_action_title(item.title, item.owner_name)
     return (
@@ -949,6 +1091,8 @@ def _format_compact_task_item(item: ActionItemListItem) -> str:
 
 
 def _build_compact_task_operations(*, show_done: bool = True) -> str:
+    """构造任务卡片底部的操作提示。"""
+
     operation_line = (
         "· 完成任务：`/done 任务ID` ｜ 查看详情：`/task 任务ID`"
         if show_done
@@ -968,7 +1112,12 @@ def _build_compact_task_operations(*, show_done: bool = True) -> str:
     )
 
 
+# Low-level formatting helpers ---------------------------------------------
+# 最底部是字符串清洗、markdown block、状态文案等小工具。
+
 def _extract_section_lines(transcript: str, starts: tuple[str, ...], stops: tuple[str, ...]) -> list[str]:
+    """从会议原文中截取某个标题开始、下一个标题结束之间的行。"""
+
     lines = [_clean_meeting_line(line) for line in transcript.splitlines()]
     lines = [line for line in lines if line]
     collecting = False
@@ -985,6 +1134,8 @@ def _extract_section_lines(transcript: str, starts: tuple[str, ...], stops: tupl
 
 
 def _extract_warning_lines(transcript: str) -> list[str]:
+    """从会议原文中提取看起来像风险/提醒的行。"""
+
     return [
         _clean_meeting_line(line)
         for line in transcript.splitlines()
@@ -994,10 +1145,14 @@ def _extract_warning_lines(transcript: str) -> list[str]:
 
 
 def _format_dot_lines(lines: Iterable[str]) -> list[str]:
+    """把普通文本行转成飞书卡片里的点状列表。"""
+
     return [f"· {line.strip()}" for line in lines if line.strip()]
 
 
 def _clean_meeting_line(line: str) -> str:
+    """清理会议原文行首的符号、emoji 和多余空白。"""
+
     cleaned = line.strip().strip("-").strip()
     for prefix in ("📢", "✅", "📋", "🔜", "⚠️", "⚠"):
         cleaned = cleaned.removeprefix(prefix).strip()
@@ -1005,10 +1160,14 @@ def _clean_meeting_line(line: str) -> str:
 
 
 def _line_contains_any(line: str, keywords: tuple[str, ...]) -> bool:
+    """判断一行文本是否包含任意关键词。"""
+
     return any(keyword in line for keyword in keywords)
 
 
 def _markdown_block(content: str) -> dict[str, Any]:
+    """把 markdown 字符串包装成飞书卡片元素。"""
+
     return {
         "tag": "markdown",
         "content": content,
@@ -1019,6 +1178,8 @@ def _markdown_block(content: str) -> dict[str, Any]:
 
 
 def _divider() -> dict[str, Any]:
+    """构造飞书卡片里的分割线元素。"""
+
     return {
         "tag": "hr",
         "margin": "8px 0px 8px 0px",
@@ -1026,6 +1187,8 @@ def _divider() -> dict[str, Any]:
 
 
 def _format_bullets(items: Iterable[str]) -> str:
+    """把字符串列表格式化成普通 markdown bullet 列表。"""
+
     materialized = [item.strip() for item in items if item.strip()]
     if not materialized:
         return "- 暂无明确结论"
@@ -1033,6 +1196,8 @@ def _format_bullets(items: Iterable[str]) -> str:
 
 
 def _get_status_label(status: str) -> str:
+    """把内部任务状态转换成中文展示文案。"""
+
     return {
         "pending": "待处理",
         "in_progress": "进行中",
@@ -1042,6 +1207,8 @@ def _get_status_label(status: str) -> str:
 
 
 def _normalize_action_title(title: str, owner_name: str) -> str:
+    """去掉任务标题里的英文前缀和重复负责人。"""
+
     normalized = title.strip()
     prefixes = ("Action:", "Next step:", "Todo:", "Follow up:", "Follow-up:")
     for prefix in prefixes:

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 
+// 页面整体布局组件，包含侧边导航栏和顶部用户信息栏，接收一个 active 属性来标识当前激活的导航项，以及 children 来渲染具体页面内容。
+
 type NavKey = "meetings" | "tasks" | "history" | "agent-debug";
 
 const NAV_ITEMS = [
