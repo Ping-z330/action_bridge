@@ -16,15 +16,19 @@ logger = logging.getLogger(__name__)
 
 
 def should_run_auto_follow_up(now: datetime, last_run_date: date | None, hour: int, minute: int) -> bool:
+    # 判断当前时间是否到了自动跟进时间，并且今天还没跑过。
     return now.hour == hour and now.minute == minute and last_run_date != now.date()
 
 
 class AutoFollowUpScheduler:
+    # 后台自动跟进调度器：按配置时间每天触发一次 run_follow_up_scan。
     def __init__(self) -> None:
+        # _task 保存 asyncio 后台任务；_last_run_date 防止同一天重复执行。
         self._task: asyncio.Task | None = None
         self._last_run_date: date | None = None
 
     async def start(self) -> None:
+        # 配置未开启或已经启动时，直接返回。
         if not AUTO_FOLLOW_UP_ENABLED or self._task is not None:
             return
         self._task = asyncio.create_task(self._run_loop())
@@ -35,6 +39,7 @@ class AutoFollowUpScheduler:
         )
 
     async def stop(self) -> None:
+        # 应用关闭时取消后台任务。
         if self._task is None:
             return
         self._task.cancel()
@@ -43,11 +48,13 @@ class AutoFollowUpScheduler:
         self._task = None
 
     async def _run_loop(self) -> None:
+        # 常驻循环：定期检查是否到了自动跟进时间。
         while True:
             now = datetime.now()
             if should_run_auto_follow_up(now, self._last_run_date, AUTO_FOLLOW_UP_HOUR, AUTO_FOLLOW_UP_MINUTE):
                 db = SessionLocal()
                 try:
+                    # 每次扫描使用独立数据库会话，执行完必须关闭。
                     result = run_follow_up_scan(db, run_date=now.date())
                     self._last_run_date = now.date()
                     logger.info(

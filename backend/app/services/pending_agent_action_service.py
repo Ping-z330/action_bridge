@@ -8,9 +8,14 @@ from app.core.time import ensure_utc, utc_now
 from app.models.pending_agent_action import PendingAgentAction
 
 
+# 用户确认/取消待执行动作时常用的口语词。
 CONFIRM_WORDS = {"确认", "确定", "是的", "是", "可以", "ok", "OK", "Ok", "好", "好的"}
 CANCEL_WORDS = {"取消", "不用", "算了", "不用了", "撤销", "放弃"}
+
+# 待确认动作的有效期，超过后自动失效。
 PENDING_ACTION_TTL_MINUTES = 30
+
+# 识别中文自然语言截止时间的正则。
 DEADLINE_PATTERN = (
     r"(?:今天|今日|明天|后天|本周[一二三四五六日天]|下周[一二三四五六日天]|"
     r"周[一二三四五六日天]|星期[一二三四五六日天]|"
@@ -21,6 +26,7 @@ DEADLINE_PATTERN = (
 
 
 def detect_confirmation_message(message: str) -> str | None:
+    # 判断用户回复是不是“确认”或“取消”。
     normalized = message.strip()
     if normalized in CONFIRM_WORDS:
         return "confirm"
@@ -36,6 +42,8 @@ def save_pending_create_task(
     owner_name: str,
     deadline: str,
 ) -> PendingAgentAction:
+    # 暂存一个“创建任务”的待确认动作。
+    # 保存前先取消同一 chat 里旧的 pending 动作，避免多个确认项互相冲突。
     cancel_pending_actions(db, chat_id)
     pending = PendingAgentAction(
         chat_id=chat_id,
@@ -66,6 +74,7 @@ def save_pending_update_task_deadline(
     new_deadline: str,
     reference_note: str = "",
 ) -> PendingAgentAction:
+    # 暂存一个“修改任务截止时间”的待确认动作。
     cancel_pending_actions(db, chat_id)
     pending = PendingAgentAction(
         chat_id=chat_id,
@@ -98,6 +107,7 @@ def save_pending_update_task_owner(
     new_owner_name: str,
     reference_note: str = "",
 ) -> PendingAgentAction:
+    # 暂存一个“修改任务负责人”的待确认动作。
     cancel_pending_actions(db, chat_id)
     pending = PendingAgentAction(
         chat_id=chat_id,
@@ -122,6 +132,7 @@ def save_pending_update_task_owner(
 
 
 def get_active_pending_action(db: Session, chat_id: str) -> PendingAgentAction | None:
+    # 获取某个聊天里最新的未过期待确认动作。
     pending = (
         db.query(PendingAgentAction)
         .filter(
@@ -135,6 +146,7 @@ def get_active_pending_action(db: Session, chat_id: str) -> PendingAgentAction |
         return None
 
     if ensure_utc(pending.expires_at) <= utc_now():
+        # 过期的动作会标记为 expired，并且不再返回给调用方。
         pending.status = "expired"
         db.commit()
         return None
@@ -143,11 +155,13 @@ def get_active_pending_action(db: Session, chat_id: str) -> PendingAgentAction |
 
 
 def resolve_pending_action(db: Session, pending: PendingAgentAction, status: str) -> None:
+    # 把待确认动作标记成 confirmed / cancelled / expired 等最终状态。
     pending.status = status
     db.commit()
 
 
 def cancel_pending_actions(db: Session, chat_id: str) -> int:
+    # 取消某个聊天里所有还在 pending 的动作。
     rows = (
         db.query(PendingAgentAction)
         .filter(
@@ -163,11 +177,13 @@ def cancel_pending_actions(db: Session, chat_id: str) -> int:
 
 
 def load_pending_payload(pending: PendingAgentAction) -> dict[str, str]:
+    # 读取待确认动作的 JSON payload，并统一转成字符串字典。
     data = json.loads(pending.payload_json)
     return {key: str(value) for key, value in data.items()}
 
 
 def detect_pending_revision(message: str, pending: PendingAgentAction) -> dict[str, str] | None:
+    # 用户在确认前可能说“改成明天”“负责人换张三”，这里识别这些修改。
     normalized = message.strip()
     if not normalized:
         return None
@@ -201,6 +217,7 @@ def update_pending_payload(
     pending: PendingAgentAction,
     updates: dict[str, str],
 ) -> dict[str, str]:
+    # 把用户补充/修正的信息写回待确认动作 payload。
     payload = load_pending_payload(pending)
     payload.update({key: value for key, value in updates.items() if value})
     pending.payload_json = json.dumps(payload, ensure_ascii=False)
@@ -210,6 +227,7 @@ def update_pending_payload(
 
 
 def _extract_deadline_revision(message: str) -> str | None:
+    # 从用户修正话术里提取新的截止时间。
     patterns = (
         rf"(?:截止时间|截止日期)?\s*(?:改成|改为|改到|调整到|设置为|换成|延期到|延到)\s*(?P<deadline>{DEADLINE_PATTERN})",
         rf"^(?P<deadline>{DEADLINE_PATTERN})$",
@@ -222,6 +240,7 @@ def _extract_deadline_revision(message: str) -> str | None:
 
 
 def _extract_owner_revision(message: str) -> str | None:
+    # 从用户修正话术里提取新的负责人。
     patterns = (
         r"(?:负责人)?\s*(?:改成|改为|换成|转给|交给|分配给)\s*(?P<owner>.{1,20}?)(?:负责)?$",
         r"负责人\s*(?P<owner>.{1,20})$",
@@ -234,6 +253,7 @@ def _extract_owner_revision(message: str) -> str | None:
 
 
 def _extract_title_revision(message: str) -> str | None:
+    # 从用户修正话术里提取新的任务标题。
     patterns = (
         r"(?:任务目标|任务内容|任务|标题)\s*(?:改成|改为|换成)\s*(?P<title>.{2,80})$",
         r"改成\s*(?P<title>.{2,80})$",
@@ -248,4 +268,5 @@ def _extract_title_revision(message: str) -> str | None:
 
 
 def _clean_field(value: str) -> str:
+    # 清理字段两端的空格和常见中文标点。
     return value.strip(" ，。！？：:；;、")

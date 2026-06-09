@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">ActionBridge task board preview</title>
+  <desc id="desc">A simplified preview of grouped tasks, filters, progress, and risk status.</desc>
+  <rect width="960" height="540" fill="#f6f7fb"/>
+  <text x="56" y="76" fill="#172033" font-family="Arial, sans-serif" font-size="34" font-weight="700">Task Board</text>
+  <rect x="56" y="112" width="118" height="36" rx="18" fill="#172033"/>
+  <text x="88" y="136" fill="#ffffff" font-family="Arial, sans-serif" font-size="14">Risk first</text>
+  <rect x="190" y="112" width="84" height="36" rx="18" fill="#ffffff" stroke="#d8e0ea"/>
+  <text x="220" y="136" fill="#455266" font-family="Arial, sans-serif" font-size="14">All</text>
+  <rect x="56" y="184" width="260" height="98" rx="16" fill="#ffffff" stroke="#dde3ee"/>
+  <text x="82" y="224" fill="#172033" font-family="Arial, sans-serif" font-size="18" font-weight="700">Overdue</text>
+  <text x="82" y="260" fill="#d64545" font-family="Arial, sans-serif" font-size="36" font-weight="700">3</text>
+  <rect x="350" y="184" width="260" height="98" rx="16" fill="#ffffff" stroke="#dde3ee"/>
+  <text x="376" y="224" fill="#172033" font-family="Arial, sans-serif" font-size="18" font-weight="700">Due Today</text>
+  <text x="376" y="260" fill="#d99a00" font-family="Arial, sans-serif" font-size="36" font-weight="700">5</text>
+  <rect x="644" y="184" width="260" height="98" rx="16" fill="#ffffff" stroke="#dde3ee"/>
+  <text x="670" y="224" fill="#172033" font-family="Arial, sans-serif" font-size="18" font-weight="700">Completed</text>
+  <text x="670" y="260" fill="#118a55" font-family="Arial, sans-serif" font-size="36" font-weight="700">18</text>
+  <rect x="56" y="326" width="848" height="142" rx="18" fill="#ffffff" stroke="#dde3ee"/>
+  <text x="84" y="370" fill="#172033" font-family="Arial, sans-serif" font-size="22" font-weight="700">Website Redesign Sync</text>
+  <rect x="702" y="350" width="112" height="28" rx="14" fill="#ffe8e8"/>
+  <text x="728" y="369" fill="#b42318" font-family="Arial, sans-serif" font-size="13">At Risk</text>
+  <rect x="84" y="402" width="700" height="12" rx="6" fill="#edf1f7"/>
+  <rect x="84" y="402" width="448" height="12" rx="6" fill="#2f80ed"/>
+  <rect x="84" y="438" width="210" height="20" rx="6" fill="#f1f5f9"/>
+  <rect x="326" y="438" width="150" height="20" rx="6" fill="#f1f5f9"/>
+  <rect x="508" y="438" width="190" height="20" rx="6" fill="#f1f5f9"/>
+</svg>

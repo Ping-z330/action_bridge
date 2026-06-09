@@ -11,11 +11,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const ACCEPTED_TEXT_TYPES = [".txt", ".md", ".vtt", ".srt"];
 
 function getTitleFromFileName(fileName: string) {
+  // 用上传文件名自动推导会议标题，去掉最后一个扩展名。
   return fileName.replace(/\.[^/.]+$/, "").trim();
 }
 
 export function MeetingForm() {
-  // useState页面“记忆”
+  // 这些 useState 是页面表单的本地状态：标题、正文、输入方式、文件名、提交中、错误提示。
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");

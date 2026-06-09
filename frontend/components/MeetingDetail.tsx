@@ -87,6 +87,7 @@ function getSaveButtonText(state: SaveState) {
 }
 
 export function MeetingDetail({ meeting }: { meeting: Meeting }) {
+  // 会议详情组件：展示摘要/决策/行动项，并支持发送飞书、跟进提醒和编辑行动项。
   const router = useRouter();
 
   // 飞书发送、跟进、批量跟进、保存行动项后的状态提示文案。
@@ -160,6 +161,7 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
   // 保存单个行动项的编辑结果。
   // 它会 PATCH 到后端，成功后用后端返回的最新会议数据刷新页面状态。
   async function handleActionItemSave(actionItemId: number) {
+    // 保存前从 editableItems 里取出该行动项当前表单值。
     const payload = editableItems[actionItemId];
 
     // 先把当前行动项按钮切到 saving 状态。
@@ -203,6 +205,7 @@ export function MeetingDetail({ meeting }: { meeting: Meeting }) {
     field: "owner_name" | "deadline" | "deadline_date" | "deadline_time" | "status",
     value: string
   ) {
+    // 只更新前端表单副本；真正写数据库要等用户点击“保存”。
     // 用户重新编辑后，把保存按钮从 saved/error 恢复成普通状态。
     setSaveStates((current) => ({ ...current, [actionItemId]: "idle" }));
     setEditableItems((current) => ({

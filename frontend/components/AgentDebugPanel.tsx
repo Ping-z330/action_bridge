@@ -6,6 +6,7 @@ import { fetchAgentTraces, runAgentDebug } from "../lib/api";
 import { AgentTraceLogItem } from "../lib/types";
 
 function formatDateTime(value: string) {
+  // Trace 时间统一按上海时区展示。
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
@@ -16,12 +17,14 @@ function formatDateTime(value: string) {
 }
 
 function stringifyFilters(filters: Record<string, unknown>) {
+  // 把 intent filters 字典压缩成一行，方便在调试卡片里查看。
   const entries = Object.entries(filters);
   if (entries.length === 0) return "无参数";
   return entries.map(([key, value]) => `${key}: ${String(value)}`).join(" / ");
 }
 
 function getIntentLabel(intent: string) {
+  // Agent 内部意图名到中文展示文案的映射。
   const labels: Record<string, string> = {
     query_tasks: "查询任务",
     summarize_project: "总结项目",
@@ -36,18 +39,23 @@ function getIntentLabel(intent: string) {
 }
 
 export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceLogItem[] }) {
+  // traces 是当前页面展示的调试记录；运行一次 Agent 后会重新拉取。
   const [traces, setTraces] = useState(initialTraces);
+  // activeTraceId 控制右侧详情面板展示哪一条 trace。
   const [activeTraceId, setActiveTraceId] = useState<number | null>(initialTraces[0]?.id ?? null);
+  // 默认填一条常用测试指令，方便打开页面就能试跑。
   const [message, setMessage] = useState("查看未完成任务");
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
   const activeTrace = useMemo(
+    // 当前选中的 trace；如果选中项不存在，就回退到第一条。
     () => traces.find((trace) => trace.id === activeTraceId) ?? traces[0],
     [activeTraceId, traces]
   );
 
   const stats = useMemo(
+    // 顶部统计卡片：总 trace、已执行工具、危险操作、需要确认的次数。
     () => ({
       total: traces.length,
       executed: traces.filter((trace) => trace.tool_executed).length,
@@ -58,6 +66,7 @@ export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceL
   );
 
   async function handleDebugRun(event: FormEvent<HTMLFormElement>) {
+    // 调用后端 debug 接口运行一次 Agent，然后重新加载最新 trace。
     event.preventDefault();
     const trimmedMessage = message.trim();
     if (!trimmedMessage) {

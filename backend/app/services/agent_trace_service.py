@@ -16,6 +16,7 @@ from app.agent.tool_registry import (
 from app.models.agent_trace_log import AgentTraceLog
 
 
+# Agent 意图和工具名的映射，用来在 trace 里记录“这次应该调用哪个工具”。
 INTENT_TOOL_MAP = {
     "query_tasks": QUERY_TASKS,
     "summarize_project": SUMMARIZE_PROJECT,
@@ -36,8 +37,11 @@ def create_agent_trace_log(
     tool_executed: bool = False,
     response: AgentResponse | None = None,
 ) -> AgentTraceLog | None:
+    # 创建一条 Agent 调试轨迹。
+    # 这个函数尽量不影响主流程：写日志失败时会 rollback 并返回 None。
     try:
         tool_name = INTENT_TOOL_MAP.get(intent.name if intent else "")
+        # 找到对应工具后，可以记录工具来源、分类、是否危险等元信息。
         tool = DEFAULT_TOOL_REGISTRY.get(tool_name) if tool_name else None
 
         trace = AgentTraceLog(
@@ -60,16 +64,19 @@ def create_agent_trace_log(
         db.refresh(trace)
         return trace
     except Exception:
+        # trace 是辅助日志，失败不能让用户的真实请求失败。
         db.rollback()
         return None
 
 
 def list_agent_trace_logs(db: Session, limit: int = 50) -> list[AgentTraceLog]:
+    # 返回最近的 Agent 轨迹，limit 做边界保护，避免一次查太多。
     safe_limit = min(max(limit, 1), 100)
     return db.query(AgentTraceLog).order_by(AgentTraceLog.id.desc()).limit(safe_limit).all()
 
 
 def get_latest_agent_trace_log(db: Session, chat_id: str | None = None) -> AgentTraceLog | None:
+    # 查询最新一条轨迹；传 chat_id 时只看某个会话。
     query = db.query(AgentTraceLog)
     if chat_id:
         query = query.filter(AgentTraceLog.chat_id == chat_id)
@@ -77,6 +84,7 @@ def get_latest_agent_trace_log(db: Session, chat_id: str | None = None) -> Agent
 
 
 def parse_trace_filters(value: str) -> dict[str, Any]:
+    # 把数据库里保存的 intent_filters_json 转成字典，解析失败就返回空字典。
     try:
         parsed = json.loads(value or "{}")
     except json.JSONDecodeError:

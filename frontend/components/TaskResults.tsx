@@ -6,8 +6,10 @@ import { useMemo, useState } from "react";
 
 import { ActionItemListItem } from "../lib/types";
 
+// 后端 API 地址；没有配置环境变量时默认连接本地 FastAPI。
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
+// 后端保存的是英文状态值，这里映射成页面展示的中文文案。
 const STATUS_LABELS: Record<string, string> = {
   pending: "待处理",
   in_progress: "进行中",
@@ -15,6 +17,7 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "有风险",
 };
 
+// 任务页顶部的筛选按钮配置。
 const FILTERS = [
   { value: "risk", label: "风险优先" },
   { value: "all", label: "全部" },
@@ -26,6 +29,7 @@ const FILTERS = [
   { value: "completed", label: "已完成" },
 ];
 
+// 到期状态排序权重：逾期和今日到期优先展示。
 const DUE_STATUS_ORDER: Record<string, number> = {
   overdue: 1,
   due_today: 2,
@@ -35,10 +39,12 @@ const DUE_STATUS_ORDER: Record<string, number> = {
 };
 
 function getStatusLabel(status: string) {
+  // 兜底返回原始 status，避免新增状态时页面直接空白。
   return STATUS_LABELS[status] ?? status;
 }
 
 function getStatusClass(status: string) {
+  // 根据任务状态返回对应的样式 class。
   if (status === "completed") return "status-completed";
   if (status === "failed") return "status-risk";
   if (status === "in_progress") return "status-progress";
@@ -46,6 +52,7 @@ function getStatusClass(status: string) {
 }
 
 function getDueStatusClass(status: string) {
+  // 根据到期风险返回对应的样式 class。
   if (status === "overdue") return "due-overdue";
   if (status === "due_today") return "due-today";
   if (status === "completed") return "status-completed";
@@ -54,6 +61,7 @@ function getDueStatusClass(status: string) {
 }
 
 function normalizeActionTitle(title: string, ownerName: string) {
+  // 清理任务标题里的英文前缀和重复负责人，让列表显示更简洁。
   let normalized = title.trim();
   const prefixes = ["Action:", "Next step:", "Todo:", "Follow up:", "Follow-up:"];
 
@@ -72,6 +80,7 @@ function normalizeActionTitle(title: string, ownerName: string) {
 }
 
 function formatDateTime(value: string) {
+  // 后端时间按上海时区展示，方便中文用户阅读。
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
@@ -82,6 +91,7 @@ function formatDateTime(value: string) {
 }
 
 function formatDeadlineDisplay(item: ActionItemListItem) {
+  // 把后端的 deadline_date / deadline_time 组合成页面里的两行截止时间。
   if (!item.deadline_date) {
     return { date: item.deadline || "待确认", detail: "请补充日期" };
   }
@@ -99,6 +109,7 @@ function formatDeadlineDisplay(item: ActionItemListItem) {
 }
 
 function getRiskMessage(overdue: number, dueToday: number, unknown: number) {
+  // 顶部风险提示文案：逾期优先级最高，其次今天到期，再其次缺少截止时间。
   if (overdue > 0) return `存在 ${overdue} 个已逾期任务，请优先处理。`;
   if (dueToday > 0) return `今天有 ${dueToday} 个任务到期，请及时跟进。`;
   if (unknown > 0) return `有 ${unknown} 个任务缺少明确截止时间，建议先补全。`;
@@ -106,6 +117,7 @@ function getRiskMessage(overdue: number, dueToday: number, unknown: number) {
 }
 
 function getMeetingStatus(items: ActionItemListItem[]) {
+  // 根据一个会议下的任务状态，计算会议整体执行状态。
   if (items.length === 0) return "暂无任务";
   if (items.every((item) => item.status === "completed")) return "已完成";
   if (items.some((item) => item.status === "failed" || item.due_status === "overdue")) return "有风险";
@@ -114,6 +126,7 @@ function getMeetingStatus(items: ActionItemListItem[]) {
 }
 
 function getMeetingStatusClass(status: string) {
+  // 会议整体状态对应的样式 class。
   if (status === "已完成") return "status-completed";
   if (status === "有风险") return "status-risk";
   if (status === "进行中") return "status-progress";
@@ -121,6 +134,7 @@ function getMeetingStatusClass(status: string) {
 }
 
 function matchesFilter(item: ActionItemListItem, activeFilter: string) {
+  // 判断单条任务是否命中当前筛选条件。
   if (activeFilter === "all") return true;
   if (activeFilter === "risk") return item.status !== "completed" && (item.status === "failed" || item.due_status !== "upcoming");
   if (activeFilter === "due_today") return item.due_status === "due_today";
@@ -129,6 +143,7 @@ function matchesFilter(item: ActionItemListItem, activeFilter: string) {
 }
 
 type MeetingGroup = {
+  // 任务页按会议分组后的展示结构。
   meetingId: number;
   meetingTitle: string;
   createdAt: string;
@@ -141,12 +156,15 @@ type MeetingGroup = {
 
 export function TaskResults({ initialItems }: { initialItems: ActionItemListItem[] }) {
   const router = useRouter();
+  // items 是当前页面展示的任务列表；更新状态成功后会同步修改它。
   const [items, setItems] = useState(initialItems);
+  // 默认使用风险优先视图，便于用户先处理最紧急的问题。
   const [activeFilter, setActiveFilter] = useState("risk");
   const [keyword, setKeyword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
   const stats = useMemo(
+    // 汇总顶部统计卡片所需的数据。
     () => ({
       total: items.length,
       pending: items.filter((item) => item.status === "pending").length,
@@ -161,6 +179,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
   );
 
   const meetingGroups = useMemo(() => {
+    // 先按筛选条件和搜索关键词过滤任务，再按到期风险排序。
     const normalizedKeyword = keyword.trim().toLowerCase();
     const visibleItems = items
       .filter((item) => {
@@ -179,6 +198,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       });
 
+    // 把过滤后的任务按 meeting_id 分组，页面上一个会议显示一张任务卡。
     const groups = new Map<number, ActionItemListItem[]>();
     for (const item of visibleItems) {
       groups.set(item.meeting_id, [...(groups.get(item.meeting_id) ?? []), item]);
@@ -186,6 +206,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
 
     return Array.from(groups.entries())
       .map(([meetingId, groupItems]): MeetingGroup => {
+        // 每个会议分组都会计算自己的完成数、进度百分比和整体状态。
         const completed = groupItems.filter((item) => item.status === "completed").length;
         const total = groupItems.length;
         const status = getMeetingStatus(groupItems);
@@ -211,6 +232,7 @@ export function TaskResults({ initialItems }: { initialItems: ActionItemListItem
   }, [activeFilter, items, keyword]);
 
   async function updateStatus(item: ActionItemListItem, status: string) {
+    // 在任务列表页直接修改任务状态，成功后同步刷新本地状态和服务端页面数据。
     setMessage("正在更新任务状态...");
 
     const response = await fetch(`${API_BASE}/api/action-items/${item.id}`, {

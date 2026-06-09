@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - covered through runtime fallback
     OpenAI = None  # type: ignore[assignment]
 
 
+# 这些集合用来识别“太泛化、没价值”的 LLM 输出，后面会用规则解析结果兜底替换。
 GENERIC_SUMMARIES = {
     "summary needs review",
     "meeting discussed related decisions",
@@ -36,6 +37,7 @@ GENERIC_ACTION_TITLES = {
     "follow up required",
 }
 
+# 任务前缀和常见动作动词，用于规则解析会议文本中的行动项。
 ACTION_PREFIXES = ("Action:", "Next step:", "Todo:", "Follow up:", "Follow-up:")
 ACTION_VERBS = (
     "更新",
@@ -63,9 +65,12 @@ ACTION_VERBS = (
     "设计",
     "实现",
 )
+
+# 缺少负责人或截止时间时使用的占位文本。
 PENDING_CONFIRMATION = "Pending confirmation"
 DEFAULT_STATUS = "pending"
 
+# 用于从行动项标题开头推断负责人，比如“产品经理 明天确认文案”。
 LEADING_OWNER_PATTERN = re.compile(
     r"^(?P<owner>"
     r"[A-Z][A-Z0-9_-]{1,20}"
@@ -73,6 +78,8 @@ LEADING_OWNER_PATTERN = re.compile(
     r"[\u4e00-\u9fff]{1,12}?(?:同学|经理|老师|负责人|总监|主管|组长|团队|小组|部门|前端|后端|测试|产品|设计|运营|开发)"
     r")(?P<rest>.*)$"
 )
+
+# 用于跳过标题开头的时间词，再判断后面是否像一个行动项。
 LEADING_TIME_PATTERN = re.compile(
     r"^(今天|明天|后天|本周|下周|今晚|今日|明日|周[一二三四五六日天]|"
     r"[上下]午|中午|晚上|早上|明早|当天|本月底前|月底前|本周内|本周五前|"
@@ -82,6 +89,7 @@ LEADING_TIME_PATTERN = re.compile(
 
 @dataclass
 class ParsedActionItem:
+    # 解析后的行动项结构，后续会写入 action_items 表。
     title: str
     owner_name: str
     deadline: str
@@ -90,15 +98,18 @@ class ParsedActionItem:
 
 @dataclass
 class ParsedMeeting:
+    # 解析后的会议结果：总结、决策、行动项。
     summary: str
     decisions: list[str]
     action_items: list[ParsedActionItem]
 
 
 def parse_transcript(title: str, transcript: str) -> ParsedMeeting:
+    # 会议解析入口：按配置选择 DeepSeek / OpenAI / 规则解析。
     provider = PARSER_PROVIDER.lower()
 
     if provider == "deepseek" and _should_use_deepseek():
+        # LLM 成功时，仍会用规则解析结果做兜底修正。
         parsed = _parse_with_deepseek(title, transcript)
         if parsed:
             return _merge_with_rule_fallback(parsed, title, transcript)
@@ -112,18 +123,22 @@ def parse_transcript(title: str, transcript: str) -> ParsedMeeting:
 
 
 def _has_real_value(value: str | None) -> bool:
+    # 判断配置值是否真的填写，而不是默认占位符。
     return bool(value) and not value.startswith("replace_with_")
 
 
 def _should_use_deepseek() -> bool:
+    # DeepSeek 可用条件：provider 指向 deepseek、有 key、openai SDK 可导入。
     return PARSER_PROVIDER.lower() == "deepseek" and _has_real_value(DEEPSEEK_API_KEY) and OpenAI is not None
 
 
 def _should_use_openai() -> bool:
+    # OpenAI 可用条件：provider 指向 openai、有 key、openai SDK 可导入。
     return PARSER_PROVIDER.lower() == "openai" and _has_real_value(OPENAI_API_KEY) and OpenAI is not None
 
 
 def _parse_with_deepseek(title: str, transcript: str) -> ParsedMeeting | None:
+    # 使用 DeepSeek 的 OpenAI-compatible API 解析会议。
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     json_example = {
         "summary": "本次会议确认了上线延期和相关分工安排。",
@@ -182,6 +197,7 @@ def _parse_with_deepseek(title: str, transcript: str) -> ParsedMeeting | None:
             response_format={"type": "json_object"},
         )
     except Exception:
+        # LLM 调用失败时返回 None，让上层回退到规则解析。
         return None
 
     content = response.choices[0].message.content if response.choices else None
@@ -197,6 +213,7 @@ def _parse_with_deepseek(title: str, transcript: str) -> ParsedMeeting | None:
 
 
 def _parse_with_openai(title: str, transcript: str) -> ParsedMeeting | None:
+    # 使用 OpenAI Responses API 和 JSON schema 解析会议。
     client = OpenAI(api_key=OPENAI_API_KEY)
     schema = {
         "type": "object",
@@ -253,6 +270,7 @@ def _parse_with_openai(title: str, transcript: str) -> ParsedMeeting | None:
             },
         )
     except Exception:
+        # LLM 调用失败时返回 None，让上层回退到规则解析。
         return None
 
     output_text = getattr(response, "output_text", None)
@@ -268,6 +286,7 @@ def _parse_with_openai(title: str, transcript: str) -> ParsedMeeting | None:
 
 
 def _parse_with_rules(title: str, transcript: str) -> ParsedMeeting:
+    # 规则解析兜底：不依赖大模型，直接从文本行里找总结、决策、行动项。
     lines = [line.strip("- ").strip() for line in transcript.splitlines() if line.strip()]
     summary = lines[0] if lines else f"Transcript received for {title}."
 
@@ -277,6 +296,7 @@ def _parse_with_rules(title: str, transcript: str) -> ParsedMeeting:
 
     action_items: list[ParsedActionItem] = []
     for line in lines:
+        # 英文关键词命中的行会被认为是行动项。
         lowered = line.lower()
         if any(keyword in lowered for keyword in ("todo", "follow up", "follow-up", "action", "next step")):
             action_items.append(
@@ -300,6 +320,7 @@ def _parse_with_rules(title: str, transcript: str) -> ParsedMeeting:
 
 
 def _parsed_meeting_from_payload(payload: dict[str, Any]) -> ParsedMeeting:
+    # 把 LLM 返回的 JSON payload 转成 ParsedMeeting，并补齐缺失字段。
     action_items = [
         _build_action_item(
             title=item.get("title", "").strip() or "Action item needs review",
@@ -335,6 +356,7 @@ def _build_action_item(
     deadline: str,
     status: str = DEFAULT_STATUS,
 ) -> ParsedActionItem:
+    # 清洗并构造 ParsedActionItem，尽量把负责人从标题里分离出来。
     cleaned_title = _strip_action_prefix(title)
     cleaned_owner = owner_name.strip() or PENDING_CONFIRMATION
 
@@ -355,6 +377,7 @@ def _build_action_item(
 
 
 def _strip_action_prefix(title: str) -> str:
+    # 去掉 Action: / Todo: / Follow up: 这类前缀。
     normalized = title.strip()
     for prefix in ACTION_PREFIXES:
         if normalized.lower().startswith(prefix.lower()):
@@ -363,6 +386,7 @@ def _strip_action_prefix(title: str) -> str:
 
 
 def _remove_owner_prefix(title: str, owner_name: str) -> str:
+    # 如果标题开头已经包含负责人，就移除，避免标题重复显示人名。
     normalized = title.strip()
     if owner_name and normalized.startswith(owner_name):
         return normalized[len(owner_name) :].lstrip("：:，, ")
@@ -370,6 +394,7 @@ def _remove_owner_prefix(title: str, owner_name: str) -> str:
 
 
 def _infer_owner_from_title(title: str) -> tuple[str | None, str]:
+    # 当 LLM 没给负责人时，尝试从标题开头推断负责人。
     normalized = title.strip()
     if not normalized or normalized.startswith("请"):
         return None, normalized
@@ -387,6 +412,7 @@ def _infer_owner_from_title(title: str) -> tuple[str | None, str]:
 
 
 def _looks_like_action_clause(text: str) -> bool:
+    # 判断一段文本是否像“要做的事”，用于避免把普通名词误判成负责人。
     normalized = text.strip()
     if not normalized:
         return False
@@ -402,6 +428,7 @@ def _looks_like_action_clause(text: str) -> bool:
 
 
 def _merge_with_rule_fallback(parsed: ParsedMeeting, title: str, transcript: str) -> ParsedMeeting:
+    # 如果 LLM 输出太泛化，就用规则解析结果替换对应部分。
     rule_based = _parse_with_rules(title, transcript)
 
     summary = parsed.summary
@@ -420,17 +447,20 @@ def _merge_with_rule_fallback(parsed: ParsedMeeting, title: str, transcript: str
 
 
 def _is_generic_summary(summary: str) -> bool:
+    # 判断总结是否是无意义的兜底文案。
     normalized = summary.strip().lower()
     return not normalized or normalized in GENERIC_SUMMARIES
 
 
 def _are_generic_decisions(decisions: list[str]) -> bool:
+    # 判断决策列表是否全是泛化内容。
     if not decisions:
         return True
     return all(item.strip().lower() in GENERIC_DECISIONS for item in decisions)
 
 
 def _are_generic_action_items(action_items: list[ParsedActionItem]) -> bool:
+    # 判断行动项是否全是泛化内容。
     if not action_items:
         return True
     return all(item.title.strip().lower() in GENERIC_ACTION_TITLES for item in action_items)

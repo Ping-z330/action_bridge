@@ -5,32 +5,38 @@ from typing import Any
 
 @dataclass(frozen=True)
 class FeishuMeetingCommand:
+    # /meeting 命令解析结果：会议标题和会议原文。
     title: str
     transcript: str
 
 
 @dataclass(frozen=True)
 class FeishuDoneCommand:
+    # /done 命令解析结果：要标记完成的行动项 ID。
     action_item_id: int
 
 
 @dataclass(frozen=True)
 class FeishuTasksCommand:
+    # /tasks 命令解析结果：列出未完成任务，默认最多展示 10 条。
     limit: int = 10
 
 
 @dataclass(frozen=True)
 class FeishuTaskCommand:
+    # /task 命令解析结果：查看单个行动项详情。
     action_item_id: int
 
 
 @dataclass(frozen=True)
 class FeishuHelpCommand:
+    # /help 命令没有额外参数。
     pass
 
 
 @dataclass(frozen=True)
 class FeishuRememberCommand:
+    # /remember 命令解析结果：保存一个记忆别名。
     alias: str
     target: str
     memory_type: str = "alias"
@@ -38,26 +44,31 @@ class FeishuRememberCommand:
 
 @dataclass(frozen=True)
 class FeishuForgetCommand:
+    # /forget 命令解析结果：删除指定别名。
     alias: str
 
 
 @dataclass(frozen=True)
 class FeishuMemoryCommand:
+    # /memory 命令没有额外参数，用于查看记忆列表。
     pass
 
 
 @dataclass(frozen=True)
 class FeishuBindChannelCommand:
+    # /bind-channel 命令解析结果：把项目关键词绑定到当前群。
     project_keyword: str
 
 
 @dataclass(frozen=True)
 class FeishuFollowUpReply:
+    # 用户对跟进提醒的自然回复，例如“#12 完成了”。
     action_item_id: int
     status: str
 
 
 def extract_challenge(payload: dict[str, Any]) -> str | None:
+    # 飞书 URL 校验时会发送 challenge，接口需要原样返回。
     challenge = payload.get("challenge") or payload.get("Challenge")
     if isinstance(challenge, str) and challenge:
         return challenge
@@ -65,6 +76,7 @@ def extract_challenge(payload: dict[str, Any]) -> str | None:
 
 
 def extract_event_dedup_key(payload: dict[str, Any]) -> str | None:
+    # 从 payload 中提取可用于事件去重的 key。
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     message = event.get("message") if isinstance(event.get("message"), dict) else {}
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
@@ -85,6 +97,7 @@ def extract_event_dedup_key(payload: dict[str, Any]) -> str | None:
 
 
 def extract_reply_chat_id(payload: dict[str, Any]) -> str | None:
+    # 从 payload 中提取回复目标 chat_id。
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     message = event.get("message") if isinstance(event.get("message"), dict) else {}
     root_message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
@@ -103,6 +116,7 @@ def extract_reply_chat_id(payload: dict[str, Any]) -> str | None:
 
 
 def extract_meeting_command(payload: dict[str, Any]) -> FeishuMeetingCommand | None:
+    # 解析 /meeting <title> 后续多行转录文本。
     text = _extract_text(payload)
     if not text:
         return None
@@ -132,6 +146,7 @@ def extract_meeting_command(payload: dict[str, Any]) -> FeishuMeetingCommand | N
 
 
 def extract_done_command(payload: dict[str, Any]) -> FeishuDoneCommand | None:
+    # 解析 /done <action_item_id>。
     text = _extract_text(payload)
     if not text:
         return None
@@ -154,6 +169,7 @@ def extract_done_command(payload: dict[str, Any]) -> FeishuDoneCommand | None:
 
 
 def extract_tasks_command(payload: dict[str, Any]) -> FeishuTasksCommand | None:
+    # 解析 /tasks。
     text = _extract_text(payload)
     if not text:
         return None
@@ -166,6 +182,7 @@ def extract_tasks_command(payload: dict[str, Any]) -> FeishuTasksCommand | None:
 
 
 def extract_task_command(payload: dict[str, Any]) -> FeishuTaskCommand | None:
+    # 解析 /task <action_item_id>，注意要避免误匹配 /tasks。
     text = _extract_text(payload)
     if not text:
         return None
@@ -191,6 +208,7 @@ def extract_task_command(payload: dict[str, Any]) -> FeishuTaskCommand | None:
 
 
 def extract_help_command(payload: dict[str, Any]) -> FeishuHelpCommand | None:
+    # 解析 /help。
     text = _extract_text(payload)
     if not text:
         return None
@@ -203,6 +221,7 @@ def extract_help_command(payload: dict[str, Any]) -> FeishuHelpCommand | None:
 
 
 def extract_remember_command(payload: dict[str, Any]) -> FeishuRememberCommand | None:
+    # 解析 /remember <alias> = <target>，也支持 /remember project <alias> = <target>。
     text = _extract_text(payload)
     if not text:
         return None
@@ -229,6 +248,7 @@ def extract_remember_command(payload: dict[str, Any]) -> FeishuRememberCommand |
 
 
 def extract_forget_command(payload: dict[str, Any]) -> FeishuForgetCommand | None:
+    # 解析 /forget <alias>。
     text = _extract_text(payload)
     if not text:
         return None
@@ -245,6 +265,7 @@ def extract_forget_command(payload: dict[str, Any]) -> FeishuForgetCommand | Non
 
 
 def extract_memory_command(payload: dict[str, Any]) -> FeishuMemoryCommand | None:
+    # 解析 /memory。
     text = _extract_text(payload)
     if not text:
         return None
@@ -256,6 +277,7 @@ def extract_memory_command(payload: dict[str, Any]) -> FeishuMemoryCommand | Non
 
 
 def extract_bind_channel_command(payload: dict[str, Any]) -> FeishuBindChannelCommand | None:
+    # 解析 /bind-channel <project_keyword>。
     text = _extract_text(payload)
     if not text:
         return None
@@ -272,6 +294,7 @@ def extract_bind_channel_command(payload: dict[str, Any]) -> FeishuBindChannelCo
 
 
 def extract_follow_up_reply(payload: dict[str, Any]) -> FeishuFollowUpReply | None:
+    # 解析用户对跟进提醒的回复，例如“#12 完成了”“12号有风险”。
     text = _extract_text(payload)
     if not text:
         return None
@@ -288,10 +311,12 @@ def extract_follow_up_reply(payload: dict[str, Any]) -> FeishuFollowUpReply | No
 
 
 def extract_message_text(payload: dict[str, Any]) -> str | None:
+    # 对外暴露的纯文本提取函数，供 Agent 自然语言流程使用。
     return _extract_text(payload)
 
 
 def _extract_action_item_id(text: str) -> int | None:
+    # 从文本里提取行动项 ID，支持 #12、12号任务等格式。
     patterns = (
         r"#\s*(\d+)",
         r"(?:任务|行动项)?\s*(\d+)\s*(?:号|號)\s*(?:任务|行动项)?",
@@ -304,6 +329,7 @@ def _extract_action_item_id(text: str) -> int | None:
 
 
 def _extract_reply_status(text: str) -> str | None:
+    # 把用户回复里的口语状态映射成系统状态。
     if any(keyword in text for keyword in ("完成了", "已完成", "做完了", "搞定了", "done", "Done")):
         return "completed"
     if any(keyword in text for keyword in ("还在进行中", "进行中", "推进中", "处理中")):
@@ -316,6 +342,7 @@ def _extract_reply_status(text: str) -> str | None:
 
 
 def _extract_text(payload: dict[str, Any]) -> str | None:
+    # 飞书 payload 可能把文本放在不同位置，这里统一提取。
     candidates = [
         payload.get("text"),
         payload.get("message", {}).get("text") if isinstance(payload.get("message"), dict) else None,
@@ -334,6 +361,7 @@ def _extract_text(payload: dict[str, Any]) -> str | None:
 
 
 def _coerce_text(value: Any) -> str | None:
+    # 把字符串、JSON 字符串或 dict content 统一转成纯文本。
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:

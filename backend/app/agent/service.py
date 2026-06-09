@@ -6,6 +6,7 @@ from app.agent.tools import filter_tasks, summarize_project_progress
 from app.schemas.task_result import ActionItemListItem
 
 
+# 这些关键词用来判断用户是不是在问“任务/行动项/进度”相关问题。
 TASK_QUERY_KEYWORDS = (
     "任务",
     "行动项",
@@ -19,6 +20,7 @@ TASK_QUERY_KEYWORDS = (
     "负责",
 )
 
+# 这些触发词用来判断用户是不是想新建一个任务。
 CREATE_TASK_TRIGGERS = (
     "加一个任务",
     "加个任务",
@@ -29,6 +31,7 @@ CREATE_TASK_TRIGGERS = (
     "安排一个任务",
 )
 
+# 识别中文日期/时间的正则表达式，比如“今天”“明天下午”“2026-06-07”等。
 DEADLINE_PATTERN = (
     r"(?:今天|今日|明天|后天|本周[一二三四五六日天]|下周[一二三四五六日天]|"
     r"周[一二三四五六日天]|星期[一二三四五六日天]|"
@@ -39,6 +42,7 @@ DEADLINE_PATTERN = (
 
 
 def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -> AgentResponse:
+    # 这是一个较简单的 Agent 入口：先识别意图，再根据意图直接返回响应。
     intent = detect_intent_with_fallback(message)
     if not intent:
         return AgentResponse(handled=False, message="No supported agent intent found.")
@@ -109,17 +113,21 @@ def handle_agent_message(message: str, action_items: list[ActionItemListItem]) -
 
 
 def detect_intent(message: str) -> AgentIntent | None:
+    # 规则版意图识别入口：按优先级从“帮助、新建、修改、查询、总结”等方向逐个判断。
     normalized = message.strip()
     if not normalized:
         return None
 
+    # 帮助类问题最简单，优先直接识别。
     if _is_help_message(normalized):
         return AgentIntent(name="help")
 
+    # 新建任务通常包含明确触发词，比如“新增任务”“加一个任务”。
     create_task_intent = _detect_create_task_intent(normalized)
     if create_task_intent:
         return create_task_intent
 
+    # 修改截止时间、负责人、状态都属于“修改任务”，这里依次判断。
     deadline_update_intent = _detect_deadline_update_intent(normalized)
     if deadline_update_intent:
         return deadline_update_intent
@@ -132,14 +140,17 @@ def detect_intent(message: str) -> AgentIntent | None:
     if update_intent:
         return update_intent
 
+    # 查询任务是最常见的读取类操作，比如“今天到期的任务有哪些”。
     query_intent = _detect_query_tasks_intent(normalized)
     if query_intent:
         return query_intent
 
+    # 如果用户像是在修改任务，但没说清任务编号，就返回“需要补充编号”的意图。
     clarification_intent = _detect_task_reference_clarification_intent(normalized)
     if clarification_intent:
         return clarification_intent
 
+    # 项目进度总结比普通查询更聚合，所以单独识别。
     progress_intent = _detect_progress_summary_intent(normalized)
     if progress_intent:
         return progress_intent
@@ -147,6 +158,7 @@ def detect_intent(message: str) -> AgentIntent | None:
     filters: dict[str, str] = {}
     lowered = normalized.lower()
 
+    # 下面这一段是兜底的查询条件提取：从一句话里抽取状态、负责人、关键词等过滤条件。
     if any(keyword in normalized for keyword in ("今天", "今日", "本日")) and _has_task_query_context(normalized):
         filters["due_status"] = "due_today"
         filters["open_only"] = "true"
@@ -187,6 +199,7 @@ def detect_intent(message: str) -> AgentIntent | None:
 
 
 def _detect_query_tasks_intent(message: str) -> AgentIntent | None:
+    # 识别“查询任务”类问题，并把用户说的条件转成 filters。
     filters: dict[str, str] = {}
     has_query_word = any(keyword in message for keyword in TASK_QUERY_KEYWORDS) or any(
         keyword in message for keyword in ("查询", "查看", "看看", "有哪些", "列出", "显示")
@@ -225,6 +238,7 @@ def _detect_query_tasks_intent(message: str) -> AgentIntent | None:
 
 
 def _has_task_query_context(message: str) -> bool:
+    # 防止只出现“今天”这种词就误判为任务查询，必须同时有任务语境。
     return any(keyword in message for keyword in TASK_QUERY_KEYWORDS) or any(
         keyword in message
         for keyword in ("查询", "查看", "看看", "有哪些", "列出", "显示", "任务", "行动项", "事项", "到期")
@@ -232,6 +246,7 @@ def _has_task_query_context(message: str) -> bool:
 
 
 def detect_intent_with_fallback(message: str) -> AgentIntent | None:
+    # 先跑规则识别；规则不够可靠时，再交给大模型做兜底理解。
     rule_intent = detect_intent(message)
     if rule_intent and _should_use_rule_before_llm(message, rule_intent):
         return rule_intent
@@ -244,6 +259,7 @@ def detect_intent_with_fallback(message: str) -> AgentIntent | None:
 
 
 def _should_use_rule_before_llm(message: str, rule_intent: AgentIntent) -> bool:
+    # 判断某个规则识别结果是否足够确定；如果不确定，就让 LLM 再判断一次。
     if rule_intent.name in {"help", "create_task", "create_task_missing_info"}:
         return True
 
@@ -265,6 +281,7 @@ def _should_use_rule_before_llm(message: str, rule_intent: AgentIntent) -> bool:
 
 
 def _detect_create_task_intent(message: str) -> AgentIntent | None:
+    # 新建任务需要识别标题、负责人、截止时间；缺字段时返回 missing_info。
     if not any(trigger in message for trigger in CREATE_TASK_TRIGGERS):
         return None
 
@@ -286,6 +303,7 @@ def _detect_create_task_intent(message: str) -> AgentIntent | None:
 
 
 def _detect_deadline_update_intent(message: str) -> AgentIntent | None:
+    # 修改截止时间必须先找到任务编号，否则不知道要改哪一个任务。
     action_item_id = _extract_action_item_id(message)
     if action_item_id is None:
         return None
@@ -314,6 +332,7 @@ def _detect_deadline_update_intent(message: str) -> AgentIntent | None:
 
 
 def _detect_owner_update_intent(message: str) -> AgentIntent | None:
+    # 修改负责人同样需要任务编号，然后从句子里提取新的负责人名字。
     action_item_id = _extract_action_item_id(message)
     if action_item_id is None:
         return None
@@ -349,6 +368,7 @@ def _detect_owner_update_intent(message: str) -> AgentIntent | None:
 
 
 def _extract_conversational_owner(message: str) -> str | None:
+    # 支持更口语化的负责人表达，比如“3号任务，张三来跟”。
     patterns = (
         r"(?:\uff0c|,|\u3002|\s)(?P<owner>.{1,20}?)(?:\u6765\u8ddf|\u6765\u8d1f\u8d23|\u8d1f\u8d23\u8ddf\u8fdb)$",
         r"(?P<owner>.{1,20}?)(?:\u6765\u8ddf|\u6765\u8d1f\u8d23|\u8d1f\u8d23\u8ddf\u8fdb)$",
@@ -363,6 +383,7 @@ def _extract_conversational_owner(message: str) -> str | None:
     return None
 
 def _clean_conversational_owner_name(owner_name: str) -> str:
+    # 清理口语句子里多余的标点和编号，只保留负责人姓名。
     for separator in ("，", ",", "。", "；", ";"):
         if separator in owner_name:
             owner_name = owner_name.rsplit(separator, 1)[-1]
@@ -371,6 +392,7 @@ def _clean_conversational_owner_name(owner_name: str) -> str:
 
 
 def _strip_create_task_prefix(message: str) -> str:
+    # 去掉“帮我新增任务：”这类前缀，留下真正的任务描述正文。
     normalized = message.strip()
     pattern = (
         r"^(?:帮我|请|麻烦)?(?:加一个任务|加个任务|创建任务|新增任务|新增行动项|"
@@ -380,6 +402,7 @@ def _strip_create_task_prefix(message: str) -> str:
 
 
 def _parse_create_task_body(body: str) -> dict[str, str]:
+    # 从新建任务正文里解析负责人、截止时间、任务标题。
     normalized = body.strip(" ，。！？：:；;")
     if not normalized:
         return {}
@@ -416,18 +439,21 @@ def _parse_create_task_body(body: str) -> dict[str, str]:
 
 
 def _clean_task_field(value: str) -> str:
+    # 清理字段前后的标点、空格和“由/请/给”等连接词。
     token = value.strip(" ，。！？：:；;、")
     token = re.sub(r"^(由|让|请|给)\s*", "", token)
     return token.strip()
 
 
 def _clean_task_title(value: str) -> str:
+    # 清理任务标题里常见的动词前缀，让标题更干净。
     token = _clean_task_field(value)
     token = re.sub(r"^(完成|负责完成|去完成)\s*", "", token)
     return token.strip()
 
 
 def _is_help_message(message: str) -> bool:
+    # 判断用户是否在询问帮助或使用说明。
     normalized = message.strip().lower()
     return normalized in {
         "help",
@@ -442,6 +468,7 @@ def _is_help_message(message: str) -> bool:
 
 
 def _detect_progress_summary_intent(message: str) -> AgentIntent | None:
+    # 识别“总结某个项目进度/风险”的请求。
     if not any(keyword in message for keyword in ("进度", "总结", "完成情况", "风险", "怎么样")):
         return None
 
@@ -453,6 +480,7 @@ def _detect_progress_summary_intent(message: str) -> AgentIntent | None:
 
 
 def _extract_progress_keyword(message: str) -> str | None:
+    # 从“XX 项目进度怎么样”里提取 XX，作为项目关键词。
     patterns = (
         r"(.{2,24})(?:项目)?(?:现在|当前|目前)?(?:进度|完成情况)(?:怎么样|如何)?",
         r"(?:总结|汇总|分析)(?:一下)?(.{2,24})(?:项目)?",
@@ -469,6 +497,7 @@ def _extract_progress_keyword(message: str) -> str | None:
 
 
 def _detect_status_update_intent(message: str) -> AgentIntent | None:
+    # 识别“把某个任务改成完成/进行中/有风险/待处理”的请求。
     action_item_id = _extract_action_item_id(message)
     if action_item_id is None:
         return None
@@ -487,6 +516,7 @@ def _detect_status_update_intent(message: str) -> AgentIntent | None:
 
 
 def _detect_task_reference_clarification_intent(message: str) -> AgentIntent | None:
+    # 用户想改任务但没给编号时，用这个意图提醒他补充任务编号。
     if _extract_action_item_id(message) is not None:
         return None
     if not _looks_like_task_mutation(message):
@@ -502,6 +532,7 @@ def _detect_task_reference_clarification_intent(message: str) -> AgentIntent | N
 
 
 def _looks_like_task_mutation(message: str) -> bool:
+    # 粗略判断一句话是不是“修改任务”的语气。
     mutation_patterns = (
         r"改成",
         r"改为",
@@ -532,6 +563,7 @@ def _looks_like_task_mutation(message: str) -> bool:
 
 
 def _extract_action_item_id(message: str) -> int | None:
+    # 支持从“3号任务”“#3”“任务 3”等表达里提取任务编号。
     patterns = (
         r"^\s*(\d+)\s*(?:\u53f7|\u9879)?",
         r"(?:\u628a|\u5c06)?\s*#\s*(\d+)",
@@ -545,6 +577,7 @@ def _extract_action_item_id(message: str) -> int | None:
     return None
 
 def _extract_target_status(message: str) -> str | None:
+    # 把中文口语状态映射成系统内部使用的状态值。
     if any(keyword in message for keyword in ("已完成", "完成", "做完", "搞定", "done", "Done")):
         return "completed"
     if any(keyword in message for keyword in ("进行中", "处理中", "开始做", "推进中")):
@@ -557,6 +590,7 @@ def _extract_target_status(message: str) -> str | None:
 
 
 def _extract_owner(message: str) -> str | None:
+    # 从查询句里提取负责人，比如“张三负责的任务”。
     patterns = (
         r"(.{1,12})负责(?:的)?(?:任务|行动项|事项)",
         r"(.{1,12})(?:还有|有|的)(?:哪些|什么)?(?:未完成|待处理|进行中)?(?:任务|行动项)",
@@ -571,6 +605,7 @@ def _extract_owner(message: str) -> str | None:
 
 
 def _extract_keyword(message: str) -> str | None:
+    # 从查询句里提取项目或主题关键词。
     patterns = (
         r"(.{2,20})(?:项目)?(?:相关|有关)的?(?:任务|行动项|进度)",
         r"(.{2,20})(?:项目)?(?:进度|还有哪些|还有什么)",
@@ -585,6 +620,7 @@ def _extract_keyword(message: str) -> str | None:
 
 
 def _clean_query_token(value: str) -> str:
+    # 清理查询关键词前后的引号、括号、标点和常见前缀。
     token = value.strip(" ，。！？：:「」『』【】[]()（）")
     prefixes = ("帮我看看", "帮我查", "查询", "查看", "看一下", "看看", "请问", "目前", "当前")
     for prefix in prefixes:
@@ -594,6 +630,7 @@ def _clean_query_token(value: str) -> str:
 
 
 def _build_query_message(items: list[ActionItemListItem], filters: dict[str, str]) -> str:
+    # 根据查询结果和过滤条件，生成给用户看的查询回复。
     if not items:
         return "没有找到符合条件的任务。"
 
@@ -609,6 +646,7 @@ def _build_query_message(items: list[ActionItemListItem], filters: dict[str, str
 
 
 def _build_update_message(filters: dict[str, str]) -> str:
+    # 根据状态修改意图，生成确认类回复。
     status_label = {
         "pending": "待处理",
         "in_progress": "进行中",
@@ -619,12 +657,14 @@ def _build_update_message(filters: dict[str, str]) -> str:
 
 
 def _build_progress_message(total_count: int, keyword: str) -> str:
+    # 根据项目总结结果数量，生成给用户看的进度总结回复。
     if total_count == 0:
         return f"没有找到与 {keyword} 相关的任务。"
     return f"已生成 {keyword} 的项目进度总结。"
 
 
 def _is_filter_phrase(value: str) -> bool:
+    # 判断某个词是不是过滤条件本身，避免把“今天”“逾期”误当成项目名或人名。
     return any(
         keyword in value
         for keyword in (

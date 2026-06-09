@@ -5,6 +5,7 @@ import { ReactNode } from "react";
 
 type NavKey = "meetings" | "tasks" | "history" | "agent-debug";
 
+// 侧边栏和顶部 tab 共用同一份导航配置，避免两个地方维护不同链接。
 const NAV_ITEMS = [
   { key: "meetings", label: "会议处理", href: "/" },
   { key: "tasks", label: "任务结果", href: "/tasks" },
@@ -13,6 +14,7 @@ const NAV_ITEMS = [
 ] satisfies Array<{ key: NavKey; label: string; href: string }>;
 
 export function AppShell({ active, children }: { active: NavKey; children: ReactNode }) {
+  // AppShell 是所有主要页面的外壳：左侧导航 + 顶部栏 + 页面内容区域。
   return (
     <div className="app-frame">
       <aside className="side-nav">
@@ -25,6 +27,7 @@ export function AppShell({ active, children }: { active: NavKey; children: React
         </div>
 
         <nav className="nav-list" aria-label="主导航">
+          {/* 主导航：active 用来高亮当前页面。 */}
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.key}
@@ -49,6 +52,7 @@ export function AppShell({ active, children }: { active: NavKey; children: React
       <main className="work-main">
         <header className="work-topbar">
           <div className="top-tabs">
+            {/* 顶部 tab 和侧边栏使用同一份 NAV_ITEMS。 */}
             {NAV_ITEMS.map((item) => (
               <Link
                 key={item.key}

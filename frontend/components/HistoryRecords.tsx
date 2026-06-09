@@ -6,6 +6,7 @@ import { CSSProperties, useMemo, useState } from "react";
 import { ActionItemListItem, MeetingListItem } from "../lib/types";
 
 function formatDateTime(value: string) {
+  // 历史页统一用上海时区展示会议创建时间。
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     year: "numeric",
@@ -17,30 +18,36 @@ function formatDateTime(value: string) {
 }
 
 function getClosureLabel(meeting: MeetingListItem) {
+  // 根据会议统计结果，生成闭环状态文案。
   if (meeting.overdue_count > 0) return "存在风险";
   if (meeting.closure_status === "closed") return "已完成闭环";
   return "执行中";
 }
 
 function getClosureClass(meeting: MeetingListItem) {
+  // 根据闭环状态返回样式 class。
   if (meeting.overdue_count > 0) return "status-risk";
   return meeting.closure_status === "closed" ? "status-completed" : "status-progress";
 }
 
 function getPercent(part: number, total: number) {
+  // 计算百分比，保留 1 位小数；总数为 0 时避免除零。
   if (total === 0) return 0;
   return Math.round((part / total) * 1000) / 10;
 }
 
 type HistoryRecordsProps = {
+  // 历史页需要会议列表和所有行动项，用来做全局统计。
   meetings: MeetingListItem[];
   actionItems: ActionItemListItem[];
 };
 
 export function HistoryRecords({ meetings, actionItems }: HistoryRecordsProps) {
+  // 搜索关键词，只过滤会议标题和摘要，不影响顶部总统计。
   const [keyword, setKeyword] = useState("");
 
   const filteredMeetings = useMemo(() => {
+    // 根据关键词过滤会议列表；空关键词时展示全部会议。
     const normalizedKeyword = keyword.trim().toLowerCase();
 
     if (!normalizedKeyword) {
@@ -56,6 +63,7 @@ export function HistoryRecords({ meetings, actionItems }: HistoryRecordsProps) {
   }, [keyword, meetings]);
 
   const stats = useMemo(() => {
+    // 顶部概览统计：从所有行动项里计算完成率、逾期率等。
     const actionCount = actionItems.length;
     const completedCount = actionItems.filter((item) => item.status === "completed").length;
     const inProgressCount = actionItems.filter((item) => item.status === "in_progress").length;
@@ -79,6 +87,7 @@ export function HistoryRecords({ meetings, actionItems }: HistoryRecordsProps) {
   }, [actionItems, meetings.length]);
 
   const ringStyle = {
+    // CSS 自定义变量用于驱动圆环进度背景。
     "--completed-rate": `${stats.completedRate * 3.6}deg`,
   } as CSSProperties;
 
