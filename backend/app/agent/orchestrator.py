@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.agent.graph import run_agent_graph, run_confirmed_agent_action
-from app.agent.schemas import AgentIntent, AgentResponse
+from app.agent.schemas import AgentResponse
 from app.models.pending_agent_action import PendingAgentAction
 from app.services.feishu_delivery import FeishuDeliveryPort, get_default_feishu_delivery
 from app.services.feishu_event_log_service import mark_feishu_event_finished
@@ -84,7 +84,7 @@ def prepare_agent_text_event(
     if not message_text:
         return AgentTextPreparation(ignored=True)
 
-    # 普通自然语言交给 Agent 图识别意图。
+    # 普通自然语言交给 Agent ReAct 循环。
     agent_response = run_agent_graph(db, message_text, chat_id=pending_chat_id)
     if not agent_response.handled:
         # 如果用户像是在提问，但 Agent 没识别出业务意图，就发兜底帮助。
@@ -92,7 +92,7 @@ def prepare_agent_text_event(
             return AgentTextPreparation(
                 agent_response=AgentResponse(
                     handled=True,
-                    intent=AgentIntent(name="fallback_help", filters={"raw_text": message_text}),
+                    intent_name="fallback_help",
                     message="Agent fallback help is ready.",
                 )
             )
@@ -109,8 +109,8 @@ def get_agent_command_type(preparation: AgentTextPreparation | None) -> str:
         return "confirm"
     if preparation.confirmation_action == "cancel":
         return "cancel"
-    if preparation.agent_response and preparation.agent_response.intent:
-        return preparation.agent_response.intent.name
+    if preparation.agent_response and preparation.agent_response.intent_name:
+        return preparation.agent_response.intent_name
     return "agent"
 
 
@@ -185,19 +185,19 @@ def handle_agent_text_event(
         return {"status": "ignored", "message": "No supported command found."}
 
     # 下面按 Agent 识别出的 intent.name 分发到不同业务分支。
-    if agent_response.intent and agent_response.intent.name == "help":
+    if agent_response.intent_name == "help":
         return _send_help_response(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    if agent_response.intent and agent_response.intent.name == "fallback_help":
+    if agent_response.intent_name == "fallback_help":
         return _send_fallback_help_response(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    if agent_response.intent and agent_response.intent.name == "create_task_missing_info":
+    if agent_response.intent_name == "create_task_missing_info":
         return _send_create_task_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    if agent_response.intent and agent_response.intent.name == "clarify_task_reference":
+    if agent_response.intent_name == "clarify_task_reference":
         return _send_task_reference_clarification(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    if agent_response.intent and agent_response.intent.name == "create_task":
+    if agent_response.intent_name == "create_task":
         return _request_create_task_confirmation(
             db=db,
             agent_response=agent_response,
@@ -207,7 +207,7 @@ def handle_agent_text_event(
             delivery=delivery,
         )
 
-    if agent_response.intent and agent_response.intent.name == "update_task_deadline":
+    if agent_response.intent_name == "update_task_deadline":
         return _request_deadline_update_confirmation(
             db=db,
             agent_response=agent_response,
@@ -217,7 +217,7 @@ def handle_agent_text_event(
             delivery=delivery,
         )
 
-    if agent_response.intent and agent_response.intent.name == "update_task_owner":
+    if agent_response.intent_name == "update_task_owner":
         return _request_owner_update_confirmation(
             db=db,
             agent_response=agent_response,
@@ -227,10 +227,10 @@ def handle_agent_text_event(
             delivery=delivery,
         )
 
-    if agent_response.intent and agent_response.intent.name == "update_task_status":
+    if agent_response.intent_name == "update_task_status":
         return _update_task_status(db, agent_response, reply_chat_id, dedup_key, delivery)
 
-    if agent_response.intent and agent_response.intent.name == "summarize_project":
+    if agent_response.intent_name == "summarize_project":
         return _send_project_summary(db, agent_response, reply_chat_id, dedup_key, delivery)
 
     return _send_query_tasks_result(db, agent_response, reply_chat_id, dedup_key, delivery)
@@ -305,7 +305,7 @@ def _handle_confirmation(
             resolve_pending_action(db, pending, "failed")
             mark_feishu_event_finished(db, dedup_key, "failed")
             return {"status": "failed", "message": "Task creation failed."}
-        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_create_task"
+        confirmed_intent = confirmed_response.intent_name if confirmed_response.intent else "confirm_create_task"
         success_message = "Task created after confirmation."
     elif pending.action_type == "update_task_deadline":
         # 确认修改任务截止时间。
@@ -320,7 +320,7 @@ def _handle_confirmation(
                 db,
                 delivery,
             )
-        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_update_task_deadline"
+        confirmed_intent = confirmed_response.intent_name if confirmed_response.intent else "confirm_update_task_deadline"
         success_message = "Task deadline updated after confirmation."
     elif pending.action_type == "update_task_owner":
         # 确认修改任务负责人。
@@ -335,7 +335,7 @@ def _handle_confirmation(
                 db,
                 delivery,
             )
-        confirmed_intent = confirmed_response.intent.name if confirmed_response.intent else "confirm_update_task_owner"
+        confirmed_intent = confirmed_response.intent_name if confirmed_response.intent else "confirm_update_task_owner"
         success_message = "Task owner updated after confirmation."
     else:
         # 理论上不会进入这里，除非数据库里保存了未知 action_type。
@@ -445,14 +445,14 @@ def _send_help_response(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "help_sent",
-            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "intent": agent_response.intent_name or "unknown",
             "message": f"Help card generated, but Feishu delivery failed: {exc}",
         }
 
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "help_sent",
-        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "intent": agent_response.intent_name or "unknown",
         "message": agent_response.message,
     }
 
@@ -475,14 +475,14 @@ def _send_fallback_help_response(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "agent_fallback",
-            "intent": agent_response.intent.name if agent_response.intent else "fallback_help",
+            "intent": agent_response.intent_name or "fallback_help",
             "message": f"Fallback help generated, but Feishu delivery failed: {exc}",
         }
 
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "agent_fallback",
-        "intent": agent_response.intent.name if agent_response.intent else "fallback_help",
+        "intent": agent_response.intent_name or "fallback_help",
         "message": agent_response.message,
     }
 
@@ -517,14 +517,14 @@ def _send_create_task_clarification(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "task_create_needs_info",
-            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "intent": agent_response.intent_name or "unknown",
             "message": f"{agent_response.message} Feishu delivery failed: {exc}",
         }
 
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_create_needs_info",
-        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "intent": agent_response.intent_name or "unknown",
         "message": agent_response.message,
     }
 
@@ -543,14 +543,14 @@ def _send_task_reference_clarification(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "task_reference_needs_info",
-            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "intent": agent_response.intent_name or "unknown",
             "message": f"{agent_response.message} Feishu delivery failed: {exc}",
         }
 
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_reference_needs_info",
-        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "intent": agent_response.intent_name or "unknown",
         "message": agent_response.message,
     }
 
@@ -564,7 +564,7 @@ def _request_create_task_confirmation(
     delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     # 创建任务属于写操作，不能直接执行，需要先保存 pending action 并让用户确认。
-    if not agent_response.intent:
+    if not agent_response.intent_name:
         mark_feishu_event_finished(db, dedup_key, "failed")
         return {"status": "ignored", "message": "No task intent generated."}
 
@@ -572,30 +572,30 @@ def _request_create_task_confirmation(
     save_pending_create_task(
         db,
         chat_id=pending_chat_id,
-        title=agent_response.intent.filters["title"],
-        owner_name=agent_response.intent.filters["owner_name"],
-        deadline=agent_response.intent.filters["deadline"],
+        title=agent_response.intent_filters["title"],
+        owner_name=agent_response.intent_filters["owner_name"],
+        deadline=agent_response.intent_filters["deadline"],
     )
     try:
         # 发送“请确认创建任务”的飞书卡片。
         delivery.send_task_create_confirmation(
-            title=agent_response.intent.filters["title"],
-            owner_name=agent_response.intent.filters["owner_name"],
-            deadline=agent_response.intent.filters["deadline"],
+            title=agent_response.intent_filters["title"],
+            owner_name=agent_response.intent_filters["owner_name"],
+            deadline=agent_response.intent_filters["deadline"],
             receive_id=reply_chat_id,
         )
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "task_create_pending",
-            "intent": agent_response.intent.name,
+            "intent": agent_response.intent_name,
             "message": f"Task create confirmation saved, but Feishu delivery failed: {exc}",
         }
 
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_create_pending",
-        "intent": agent_response.intent.name,
+        "intent": agent_response.intent_name,
         "message": "Task create confirmation requested.",
     }
 
@@ -609,13 +609,13 @@ def _request_deadline_update_confirmation(
     delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     # 修改截止时间属于写操作，先保存 pending action，再发确认卡片。
-    if not agent_response.intent:
+    if not agent_response.intent_name:
         mark_feishu_event_finished(db, dedup_key, "failed")
         return {"status": "ignored", "message": "No task intent generated."}
 
     # 从 Agent 识别结果里拿到任务 ID 和新截止时间。
-    action_item_id = int(agent_response.intent.filters["action_item_id"])
-    new_deadline = agent_response.intent.filters["deadline"]
+    action_item_id = int(agent_response.intent_filters["action_item_id"])
+    new_deadline = agent_response.intent_filters["deadline"]
     action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
     if not action_item:
         return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
@@ -628,7 +628,7 @@ def _request_deadline_update_confirmation(
         title=action_item.title,
         old_deadline=action_item.deadline,
         new_deadline=new_deadline,
-        reference_note=agent_response.intent.filters.get("reference_note", ""),
+        reference_note=agent_response.intent_filters.get("reference_note", ""),
     )
     try:
         # 发送“请确认修改截止时间”的飞书卡片。
@@ -639,14 +639,14 @@ def _request_deadline_update_confirmation(
             "new_deadline": new_deadline,
             "receive_id": reply_chat_id,
         }
-        if agent_response.intent.filters.get("reference_note"):
-            confirmation_kwargs["reference_note"] = agent_response.intent.filters["reference_note"]
+        if agent_response.intent_filters.get("reference_note"):
+            confirmation_kwargs["reference_note"] = agent_response.intent_filters["reference_note"]
         delivery.send_task_deadline_update_confirmation(**confirmation_kwargs)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "task_deadline_update_pending",
-            "intent": agent_response.intent.name,
+            "intent": agent_response.intent_name,
             "action_item_id": action_item_id,
             "message": f"Task deadline update confirmation saved, but Feishu delivery failed: {exc}",
         }
@@ -654,7 +654,7 @@ def _request_deadline_update_confirmation(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_deadline_update_pending",
-        "intent": agent_response.intent.name,
+        "intent": agent_response.intent_name,
         "action_item_id": action_item_id,
         "message": "Task deadline update confirmation requested.",
     }
@@ -669,13 +669,13 @@ def _request_owner_update_confirmation(
     delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     # 修改负责人属于写操作，先保存 pending action，再发确认卡片。
-    if not agent_response.intent:
+    if not agent_response.intent_name:
         mark_feishu_event_finished(db, dedup_key, "failed")
         return {"status": "ignored", "message": "No task intent generated."}
 
     # 从 Agent 识别结果里拿到任务 ID 和新负责人。
-    action_item_id = int(agent_response.intent.filters["action_item_id"])
-    new_owner_name = agent_response.intent.filters["owner_name"]
+    action_item_id = int(agent_response.intent_filters["action_item_id"])
+    new_owner_name = agent_response.intent_filters["owner_name"]
     action_item = next((item for item in list_action_items(db) if item.id == action_item_id), None)
     if not action_item:
         return send_task_not_found_response(action_item_id, dedup_key, reply_chat_id, db, delivery)
@@ -688,7 +688,7 @@ def _request_owner_update_confirmation(
         title=action_item.title,
         old_owner_name=action_item.owner_name,
         new_owner_name=new_owner_name,
-        reference_note=agent_response.intent.filters.get("reference_note", ""),
+        reference_note=agent_response.intent_filters.get("reference_note", ""),
     )
     try:
         # 发送“请确认修改负责人”的飞书卡片。
@@ -699,14 +699,14 @@ def _request_owner_update_confirmation(
             "new_owner_name": new_owner_name,
             "receive_id": reply_chat_id,
         }
-        if agent_response.intent.filters.get("reference_note"):
-            confirmation_kwargs["reference_note"] = agent_response.intent.filters["reference_note"]
+        if agent_response.intent_filters.get("reference_note"):
+            confirmation_kwargs["reference_note"] = agent_response.intent_filters["reference_note"]
         delivery.send_task_owner_update_confirmation(**confirmation_kwargs)
     except FeishuDeliveryError as exc:
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "task_owner_update_pending",
-            "intent": agent_response.intent.name,
+            "intent": agent_response.intent_name,
             "action_item_id": action_item_id,
             "message": f"Task owner update confirmation saved, but Feishu delivery failed: {exc}",
         }
@@ -714,7 +714,7 @@ def _request_owner_update_confirmation(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "task_owner_update_pending",
-        "intent": agent_response.intent.name,
+        "intent": agent_response.intent_name,
         "action_item_id": action_item_id,
         "message": "Task owner update confirmation requested.",
     }
@@ -728,13 +728,13 @@ def _update_task_status(
     delivery: FeishuDeliveryPort,
 ) -> dict[str, Any]:
     # 更新任务状态通常可以直接执行，例如“把 12 号任务标记完成”。
-    if not agent_response.intent:
+    if not agent_response.intent_name:
         mark_feishu_event_finished(db, dedup_key, "failed")
         return {"status": "ignored", "message": "No task intent generated."}
 
     # 读取 Agent 识别出来的任务 ID 和目标状态。
-    action_item_id = int(agent_response.intent.filters["action_item_id"])
-    target_status = agent_response.intent.filters["status"]
+    action_item_id = int(agent_response.intent_filters["action_item_id"])
+    target_status = agent_response.intent_filters["status"]
 
     # 有些 Agent 工具已经执行过更新；如果没有，就在这里执行更新。
     if agent_response.executed_action:
@@ -766,7 +766,7 @@ def _update_task_status(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "agent_updated",
-            "intent": agent_response.intent.name,
+            "intent": agent_response.intent_name,
             "action_item_id": action_item.id,
             "target_status": target_status,
             "message": f"Task updated, but Feishu delivery failed: {exc}",
@@ -775,7 +775,7 @@ def _update_task_status(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "agent_updated",
-        "intent": agent_response.intent.name,
+        "intent": agent_response.intent_name,
         "action_item_id": action_item.id,
         "target_status": target_status,
         "synced_receive_id": synced_receive_id,
@@ -801,7 +801,7 @@ def _send_project_summary(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "agent_replied",
-            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "intent": agent_response.intent_name or "unknown",
             "task_count": len(agent_response.items),
             "message": f"{agent_response.message} Feishu delivery failed: {exc}",
         }
@@ -809,7 +809,7 @@ def _send_project_summary(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "agent_replied",
-        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "intent": agent_response.intent_name or "unknown",
         "task_count": len(agent_response.items),
         "message": agent_response.message,
     }
@@ -842,7 +842,7 @@ def _send_query_tasks_result(
         mark_feishu_event_finished(db, dedup_key, "finished")
         return {
             "status": "agent_replied",
-            "intent": agent_response.intent.name if agent_response.intent else "unknown",
+            "intent": agent_response.intent_name or "unknown",
             "task_count": len(agent_response.items),
             "message": f"{agent_response.message} Feishu delivery failed: {exc}",
         }
@@ -850,7 +850,7 @@ def _send_query_tasks_result(
     mark_feishu_event_finished(db, dedup_key, "finished")
     return {
         "status": "agent_replied",
-        "intent": agent_response.intent.name if agent_response.intent else "unknown",
+        "intent": agent_response.intent_name or "unknown",
         "task_count": len(agent_response.items),
         "message": agent_response.message,
     }
@@ -858,7 +858,7 @@ def _send_query_tasks_result(
 
 def _build_empty_query_notice(agent_response: AgentResponse) -> str:
     # 查询没有结果时，构造提示文案。
-    filters = agent_response.intent.filters if agent_response.intent else {}
+    filters = agent_response.intent_filters or {}
     condition = _describe_query_filters(filters)
     return "\n".join(
         [

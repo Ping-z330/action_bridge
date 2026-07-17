@@ -28,8 +28,11 @@ from app.schemas.task import FeishuSendResponse
 from app.schemas.task_result import ActionItemListItem
 from app.services.feishu_event_log_service import mark_feishu_event_finished, register_feishu_event
 from app.services.feishu_event_router import parse_feishu_event
+from app.agent.personal_assistant import handle_personal_message, build_personal_assistant_response
+from app.services.plan_service import get_member_by_chat_id
 from app.services.feishu_service import (
     extract_card_callback_action,
+    send_text_reply,
     send_action_item_completed_notice,
     send_help_card,
     send_meeting_summary,
@@ -63,6 +66,22 @@ from app.services.meeting_service import (
 
 # 说明文件里的所有接口都会以/api开头
 router = APIRouter(prefix="/api")
+
+
+def _extract_chat_type(payload: dict) -> str | None:
+    """Extract chat_type from Feishu raw payload."""
+    try:
+        return payload.get("event", {}).get("message", {}).get("chat_type")
+    except Exception:
+        return None
+
+
+def _extract_sender_open_id(payload: dict) -> str | None:
+    """Extract sender open_id from Feishu raw payload."""
+    try:
+        return payload.get("event", {}).get("sender", {}).get("sender_id", {}).get("open_id")
+    except Exception:
+        return None
 
 
 # 构建一个 FeishuDeliveryPort 实例，封装了所有发送消息到飞书的函数，
@@ -206,9 +225,10 @@ def run_agent_debug(payload: AgentDebugRunRequest, db: Session = Depends(get_db)
 
     return AgentDebugRunResponse(
         handled=agent_response.handled,
-        intent_name=agent_response.intent.name if agent_response.intent else "unhandled",
+        intent_name=agent_response.intent_name or "unhandled",
         message=agent_response.message,
         trace_id=trace.id if trace else None,
+        steps=[s.to_dict() for s in agent_response.steps],
     )
 
 
@@ -260,6 +280,16 @@ def handle_feishu_events(
 ) -> dict[str, Any]:
     """飞书消息事件入口：解析事件、去重、分发固定命令或自然语言 Agent。"""
 
+    # 调试：打印原始 payload 的关键字段
+    import json as _json
+    try:
+        _evt = payload.get("event", {})
+        _msg = _evt.get("message", {})
+        print(f"\n[FEISHU RAW] chat_type={_msg.get('chat_type')} msg_type={_msg.get('message_type')} content={str(_msg.get('content',''))[:100]}")
+        print(f"[FEISHU RAW] sender={_evt.get('sender',{}).get('sender_id',{})}")
+    except Exception:
+        pass
+
     # 第一步：把飞书原始 payload 解析成项目内部统一的事件对象。
     try:
         event = parse_feishu_event(payload, db)
@@ -299,7 +329,55 @@ def handle_feishu_events(
     if fixed_response:
         return fixed_response
 
-    # 第三步：如果不是 /meeting，但可以交给 Agent 理解，就走自然语言 Agent。
+    # 第三步：检查是否是项目成员的私聊消息 → 走个人助手。
+    chat_type = _extract_chat_type(payload)
+    sender_open_id = _extract_sender_open_id(payload)
+    # 调试日志：打印飞书事件关键信息
+    import logging
+    _logger = logging.getLogger("feishu_debug")
+    _logger.setLevel(logging.INFO)
+    if not _logger.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(logging.Formatter("%(message)s"))
+        _logger.addHandler(_h)
+    _logger.info(f"[FEISHU] chat_type={chat_type} open_id={sender_open_id} text={event.message_text[:50] if event.message_text else 'none'}")
+
+    if chat_type in ("private", "p2p") and sender_open_id:
+        member = get_member_by_chat_id(db, sender_open_id)
+        if member is not None:
+            personal_response = handle_personal_message(
+                db=db,
+                message=event.message_text or "",
+                member_name=member.name,
+                member_chat_id=sender_open_id,
+            )
+            reply_text = build_personal_assistant_response(personal_response, member.name)
+            # 通过飞书 API 主动回复消息
+            try:
+                send_text_reply(reply_text, sender_open_id)
+            except Exception:
+                pass  # 飞书回复失败不阻塞事件响应
+            mark_feishu_event_finished(db, event.dedup_key, "finished")
+            return {
+                "status": "personal_assistant",
+                "member": member.name,
+                "message": reply_text,
+            }
+        else:
+            # Unknown member: tell them their open_id
+            unknown_msg = f"你还未注册为项目成员。\n请在 Demo 页注册，chat_id 填: {sender_open_id}"
+            try:
+                send_text_reply(unknown_msg, sender_open_id)
+            except Exception:
+                pass
+            mark_feishu_event_finished(db, event.dedup_key, "finished")
+            return {
+                "status": "unknown_member",
+                "message": unknown_msg,
+                "open_id": sender_open_id,
+            }
+
+    # 第四步：如果不是 /meeting，但可以交给 Agent 理解，就走自然语言 Agent。
     if not event.meeting_command and event.agent_preparation:
         return handle_agent_text_event(
             db=db,

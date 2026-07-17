@@ -132,6 +132,63 @@ def run_lightweight_migrations() -> None:
             connection.execute(text("CREATE UNIQUE INDEX ix_project_channels_project_keyword ON project_channels (project_keyword)"))
             connection.execute(text("CREATE INDEX ix_project_channels_receive_id ON project_channels (receive_id)"))
 
+    if "projects" not in table_names:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE projects (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    description TEXT DEFAULT '',
+                    owner_id VARCHAR(128) DEFAULT '',
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE INDEX ix_projects_id ON projects (id)"))
+
+    if "members" not in table_names:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE members (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    project_id INTEGER NOT NULL REFERENCES projects(id),
+                    name VARCHAR(120) NOT NULL,
+                    chat_id VARCHAR(128) DEFAULT '',
+                    role VARCHAR(32) DEFAULT 'member',
+                    last_active_at DATETIME NOT NULL,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE INDEX ix_members_id ON members (id)"))
+        connection.execute(text("CREATE INDEX ix_members_project_id ON members (project_id)"))
+
+    if "alerts" not in table_names:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE alerts (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    project_id INTEGER NOT NULL REFERENCES projects(id),
+                    alert_type VARCHAR(32) DEFAULT 'overdue',
+                    severity VARCHAR(16) DEFAULT 'warning',
+                    message TEXT DEFAULT '',
+                    status VARCHAR(16) DEFAULT 'active',
+                    acknowledged_by VARCHAR(128) DEFAULT '',
+                    created_at DATETIME NOT NULL,
+                    resolved_at DATETIME
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE INDEX ix_alerts_id ON alerts (id)"))
+        connection.execute(text("CREATE INDEX ix_alerts_project_id ON alerts (project_id)"))
+
     # action_items 是旧表；如果数据库还没有这张表，后面的字段补丁就不执行。
     if "action_items" not in table_names:
         return

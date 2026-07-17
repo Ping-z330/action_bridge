@@ -47,9 +47,11 @@ class AgentDebugRunRequest(BaseModel):
 class AgentDebugRunResponse(BaseModel):
     # 调试运行 Agent 后返回给前端的结果。
     handled: bool
-    # 本次识别到的意图名称。
+    # 本次识别到的意图名称（ReAct 模式下为调用的工具名）。
     intent_name: str
     # Agent 回复内容。
     message: str
     # 对应的 trace 记录 ID；没有写入时可能为空。
     trace_id: int | None = None
+    # ReAct 步骤链（新），供 debug 面板展示每一步的 thought/tool/result。
+    steps: list[dict] = []

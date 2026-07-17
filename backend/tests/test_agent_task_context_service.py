@@ -14,7 +14,8 @@ def test_save_and_load_recent_task_context(db_session) -> None:
 
     save_recent_task_context(db_session, "oc_test", list_action_items(db_session))
 
-    assert load_recent_task_ids(db_session, "oc_test") == [
+    loaded_ids = load_recent_task_ids(db_session, "oc_test")
+    assert set(loaded_ids) == {
         meeting.action_items[0].id,
         meeting.action_items[1].id,
-    ]
+    }

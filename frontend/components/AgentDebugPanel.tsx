@@ -1,12 +1,11 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchAgentTraces, runAgentDebug } from "../lib/api";
-import { AgentTraceLogItem } from "../lib/types";
+import { AgentStep, AgentTraceLogItem } from "../lib/types";
 
 function formatDateTime(value: string) {
-  // Trace 时间统一按上海时区展示。
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
@@ -17,45 +16,66 @@ function formatDateTime(value: string) {
 }
 
 function stringifyFilters(filters: Record<string, unknown>) {
-  // 把 intent filters 字典压缩成一行，方便在调试卡片里查看。
   const entries = Object.entries(filters);
   if (entries.length === 0) return "无参数";
   return entries.map(([key, value]) => `${key}: ${String(value)}`).join(" / ");
 }
 
 function getIntentLabel(intent: string) {
-  // Agent 内部意图名到中文展示文案的映射。
   const labels: Record<string, string> = {
     query_tasks: "查询任务",
-    summarize_project: "总结项目",
     update_task_status: "更新状态",
-    confirm_create_task: "确认创建任务",
-    confirm_update_task_deadline: "确认修改截止时间",
-    confirm_update_task_owner: "确认修改负责人",
+    summarize_project: "总结项目",
+    analyze_risk: "风险分析",
+    generate_progress_report: "进度报告",
+    query_member_activity: "成员活跃度",
+    create_alert: "创建预警",
+    create_task: "创建任务",
+    update_task_deadline: "修改截止",
+    update_task_owner: "修改负责人",
+    confirm_create_task: "确认创建",
+    confirm_update_task_deadline: "确认改截止",
+    confirm_update_task_owner: "确认改负责人",
+    central_analysis: "中央分析",
+    agent_response: "Agent 回复",
     fallback_help: "帮助兜底",
     unhandled: "未处理",
   };
   return labels[intent] ?? intent;
 }
 
+function getToolLabel(name: string) {
+  const labels: Record<string, string> = {
+    query_tasks: "查询任务",
+    query_member_activity: "成员活跃度",
+    summarize_project: "项目总结",
+    analyze_risk: "风险分析",
+    generate_progress_report: "进度报告",
+    update_task_status: "更新状态",
+    create_task: "创建任务",
+    update_task_deadline: "修改截止",
+    update_task_owner: "修改负责人",
+    create_alert: "创建预警",
+  };
+  return labels[name] ?? name;
+}
+
 export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceLogItem[] }) {
-  // traces 是当前页面展示的调试记录；运行一次 Agent 后会重新拉取。
   const [traces, setTraces] = useState(initialTraces);
-  // activeTraceId 控制右侧详情面板展示哪一条 trace。
   const [activeTraceId, setActiveTraceId] = useState<number | null>(initialTraces[0]?.id ?? null);
-  // 默认填一条常用测试指令，方便打开页面就能试跑。
-  const [message, setMessage] = useState("查看未完成任务");
+  const [message, setMessage] = useState("查看所有任务");
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [lastSteps, setLastSteps] = useState<AgentStep[]>([]);
+  const [lastResponse, setLastResponse] = useState<string>("");
+  const stepsRef = useRef<HTMLDivElement>(null);
 
   const activeTrace = useMemo(
-    // 当前选中的 trace；如果选中项不存在，就回退到第一条。
     () => traces.find((trace) => trace.id === activeTraceId) ?? traces[0],
     [activeTraceId, traces]
   );
 
   const stats = useMemo(
-    // 顶部统计卡片：总 trace、已执行工具、危险操作、需要确认的次数。
     () => ({
       total: traces.length,
       executed: traces.filter((trace) => trace.tool_executed).length,
@@ -65,8 +85,14 @@ export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceL
     [traces]
   );
 
+  // Scroll to steps when new steps arrive
+  useEffect(() => {
+    if (lastSteps.length > 0 && stepsRef.current) {
+      stepsRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [lastSteps]);
+
   async function handleDebugRun(event: FormEvent<HTMLFormElement>) {
-    // 调用后端 debug 接口运行一次 Agent，然后重新加载最新 trace。
     event.preventDefault();
     const trimmedMessage = message.trim();
     if (!trimmedMessage) {
@@ -75,13 +101,25 @@ export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceL
     }
 
     setIsRunning(true);
-    setRunStatus("Agent 正在执行...");
+    setRunStatus("Agent 正在执行 ReAct 循环...");
+    setLastSteps([]);
+    setLastResponse("");
     try {
       const result = await runAgentDebug(trimmedMessage);
       const latestTraces = await fetchAgentTraces();
       setTraces(latestTraces);
       setActiveTraceId(result.trace_id ?? latestTraces[0]?.id ?? null);
-      setRunStatus(`执行完成：${getIntentLabel(result.intent_name)}，${result.handled ? "已处理" : "未处理"}`);
+      // Capture ReAct steps for live display
+      if (result.steps && result.steps.length > 0) {
+        setLastSteps(result.steps);
+      }
+      setLastResponse(result.message);
+      const toolLabels = result.steps?.map((s) => getToolLabel(s.tool_name)).join(" → ") || "";
+      setRunStatus(
+        result.handled
+          ? `✅ ${toolLabels || result.intent_name} (${result.steps?.length || 0} 步)`
+          : `⚠️ ${result.message.slice(0, 60)}`
+      );
     } catch (error) {
       setRunStatus(error instanceof Error ? error.message : "Agent 调试运行失败");
     } finally {
@@ -93,29 +131,73 @@ export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceL
     <section className="debug-page">
       <div className="debug-hero">
         <div>
-          <p className="section-label">Agent Trace</p>
+          <p className="section-label">Agent Trace · ReAct 可观测面板</p>
           <h1>Agent 执行调试面板</h1>
-          <p>输入一句自然语言，观察它如何经过 Memory、意图识别、任务引用解析、工具调用和最终回复。</p>
+          <p>
+            输入自然语言 → LLM 自主选择工具链 → 执行 → 观察结果 → 再决策。
+            每一步的 Thought / Tool Call / Result 都可追溯。
+          </p>
         </div>
       </div>
 
       <form className="debug-runner work-card" onSubmit={handleDebugRun}>
         <div>
           <h2>调试运行</h2>
-          <p>这里调用的是和飞书消息相同的 Agent Graph，适合快速验证自然语言理解效果。</p>
+          <p>这里调用的是和飞书消息相同的 ReAct Agent 循环。</p>
         </div>
         <div className="debug-runner-controls">
           <input
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            placeholder="例如：把第二个任务负责人改成测试同学"
+            placeholder="例如：分析项目风险"
           />
           <button type="submit" disabled={isRunning}>
-            {isRunning ? "运行中..." : "运行 Agent"}
+            {isRunning ? "⏳ 运行中..." : "▶ 运行 Agent"}
           </button>
         </div>
         {runStatus ? <p className="debug-run-status">{runStatus}</p> : null}
       </form>
+
+      {/* Live ReAct steps from last run */}
+      {lastSteps.length > 0 && (
+        <div className="work-card" ref={stepsRef} style={{ marginBottom: "1.5rem" }}>
+          <h2>ReAct 步骤链 · 最近一次执行</h2>
+          <div className="react-chain">
+            {lastSteps.map((step, index) => (
+              <div key={index} className={`react-step ${step.tool_error ? "react-step-error" : ""}`}>
+                <div className="react-step-header">
+                  <span className="react-step-number">Step {index + 1}</span>
+                  <span className="react-step-tool">
+                    {getToolLabel(step.tool_name)}
+                  </span>
+                  {step.tool_error && <span className="react-step-badge error">失败</span>}
+                </div>
+                <div className="react-step-body">
+                  <div className="react-step-row">
+                    <span className="react-step-label">参数</span>
+                    <code>{JSON.stringify(step.tool_args, null, 2)}</code>
+                  </div>
+                  <div className="react-step-row">
+                    <span className="react-step-label">结果</span>
+                    <code className={step.tool_error ? "text-error" : ""}>
+                      {step.tool_error ? step.tool_error : step.tool_result}
+                    </code>
+                  </div>
+                </div>
+                {index < lastSteps.length - 1 && (
+                  <div className="react-step-arrow">↓</div>
+                )}
+              </div>
+            ))}
+          </div>
+          {lastResponse && (
+            <div className="react-final">
+              <strong>Agent 最终回复</strong>
+              <p style={{ whiteSpace: "pre-wrap" }}>{lastResponse}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="debug-stat-grid">
         <div className="debug-stat-card">
@@ -184,21 +266,24 @@ export function AgentDebugPanel({ traces: initialTraces }: { traces: AgentTraceL
                   <p>{activeTrace.normalized_message || "无归一化结果"}</p>
                 </section>
                 <section className="debug-step">
-                  <span>3. 意图识别</span>
-                  <p>{activeTrace.intent_name}</p>
+                  <span>3. Agent 意图 / 工具名</span>
+                  <p>{getIntentLabel(activeTrace.intent_name)}</p>
                   <small>{stringifyFilters(activeTrace.intent_filters)}</small>
                 </section>
                 <section className="debug-step">
-                  <span>4. 工具路由</span>
+                  <span>4. 工具执行</span>
                   <p>{activeTrace.tool_name || "未命中工具"}</p>
                   <small>
-                    来源：{activeTrace.tool_source || "无"} / 类型：{activeTrace.tool_category || "无"}
+                    {activeTrace.tool_source} / {activeTrace.tool_category}
+                    {activeTrace.tool_executed ? " · 已执行" : " · 未执行"}
                   </small>
                 </section>
                 <section className="debug-step">
-                  <span>5. 执行策略</span>
-                  <p>{activeTrace.tool_executed ? "已执行工具" : "未执行工具"}</p>
-                  <small>{activeTrace.requires_confirmation ? "需要用户确认" : "无需确认"}</small>
+                  <span>5. 安全策略</span>
+                  <p>
+                    {activeTrace.dangerous ? "⚠️ 危险写操作" : "✅ 安全读操作"}
+                    {activeTrace.requires_confirmation ? " · 需用户确认" : ""}
+                  </p>
                 </section>
                 <section className="debug-step">
                   <span>6. 最终回复</span>

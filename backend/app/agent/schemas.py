@@ -3,80 +3,118 @@ from dataclasses import dataclass, field
 from app.schemas.task_result import ActionItemListItem
 
 
-# 项目进度总结结构。
-# summarize_project 工具会生成它，feishu_service.py 会用它构造项目进度卡片。
+# ── Agent 基础结构 ──────────────────────────────────────────
+
 @dataclass(frozen=True)
 class ProjectProgressSummary:
-    # 项目关键词，例如“官网改版”。
+    """项目进度总结，summarize_project 工具会生成它。"""
     keyword: str
-
-    # 任务总数和各种状态数量。
     total_count: int
     completed_count: int
     in_progress_count: int
     pending_count: int
     failed_count: int
-
-    # 到期风险统计。
     overdue_count: int
     due_today_count: int
-
-    # 完成率，通常是 completed_count / total_count * 100。
     completion_rate: float
-
-    # 面向用户的进度判断文案。
     conclusion: str
-
-    # 参与本次项目总结的重点任务列表。
     items: list[ActionItemListItem] = field(default_factory=list)
 
 
-# Agent 识别出来的“意图”。
-# 例如 query_tasks、create_task、update_task_owner、summarize_project。
-@dataclass(frozen=True)
-class AgentIntent:
-    # 意图名称。
-    name: str
+@dataclass
+class AgentStep:
+    """ReAct 循环中单个步骤的记录：LLM 选了哪个工具、传了什么参数、执行结果是什么。"""
+    thought: str = ""
+    tool_name: str = ""
+    tool_args: dict = field(default_factory=dict)
+    tool_result: str = ""
+    tool_error: str = ""
 
-    # 意图参数，例如 action_item_id、owner_name、deadline、keyword。
-    filters: dict[str, str] = field(default_factory=dict)
+    def to_dict(self) -> dict:
+        return {
+            "thought": self.thought,
+            "tool_name": self.tool_name,
+            "tool_args": self.tool_args,
+            "tool_result": self.tool_result,
+            "tool_error": self.tool_error,
+        }
 
 
-# Agent 工具实际执行后的结果。
-# 写操作工具会返回它，例如创建任务、更新状态、修改负责人。
-@dataclass(frozen=True)
+@dataclass
 class AgentExecutedAction:
-    # 执行动作类型，例如 create_task、update_task_status。
+    """工具执行后的统一结果，写操作工具会返回它。"""
     action_type: str
-
-    # 执行状态，例如 completed、failed。
     status: str
-
-    # 被操作的行动项 ID，创建失败或无目标时可能为空。
     action_item_id: int | None = None
-
-    # 下面这些 target_* 字段记录本次动作想改成什么。
     target_title: str | None = None
     target_status: str | None = None
     target_deadline: str | None = None
     target_owner_name: str | None = None
-
-    # 执行后返回的最新行动项详情。
     action_item: ActionItemListItem | None = None
 
 
-# Agent 执行完一轮后的统一响应。
-# graph.py 返回它，orchestrator.py 根据它决定怎么回复飞书。
+# ── mRNA 协议结构 ──────────────────────────────────────────
+
+@dataclass
+class mRNAEnvelope:
+    """Agent 间通信协议：个人助手 → 中央 Agent 的结构化消息。"""
+    sender_agent_id: str       # "personal:zhangsan"
+    receiver_agent_id: str     # "central:project-1"
+    message_type: str          # "task_update" | "status_report" | "alert_ack"
+    payload: dict              # 结构化数据
+    timestamp: str = ""
+
+
+# ── 风险评估结构 ────────────────────────────────────────────
+
+@dataclass
+class RiskAssessment:
+    """单一风险项。"""
+    task_id: int
+    task_title: str
+    risk_type: str             # "overdue" | "no_update" | "blocked" | "dependency_chain"
+    severity: str              # "critical" | "warning" | "info"
+    description: str
+    impacted_task_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class ProjectRiskReport:
+    """项目的完整风险评估报告。"""
+    project_id: int
+    risk_score: int            # 0–100，数字越大风险越高
+    total_tasks: int
+    overdue_count: int
+    no_update_count: int
+    blocked_count: int
+    risks: list[RiskAssessment] = field(default_factory=list)
+    conclusion: str = ""
+
+
+# ── Agent 统一响应 ──────────────────────────────────────────
+
+# ── 向后兼容：旧版 AgentIntent（渐进式重构用）─────────────
+# Phase 1 完成后逐步移除 service.py / response_builder.py / task_reference_resolver.py 中的依赖
+
 @dataclass(frozen=True)
+class AgentIntent:
+    """[已废弃] 旧版意图标签。ReAct 模式下不再使用，保留用于渐进式重构。"""
+    name: str
+    filters: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class AgentResponse:
-    # handled=False 表示 Agent 不处理这条消息。
+    """Agent 执行完一轮后的统一响应。
+
+    相比旧版去掉了 AgentIntent 字段 —— ReAct 模式下不再有"意图标签"，
+    取而代之的是 steps（ReAct 步骤链）和 tool_calls（LLM 自主选择的工具调用）。
+    """
     handled: bool
-
-    # 本次识别到的意图。
-    intent: AgentIntent | None = None
-
-    # 简短响应文案，主要用于 trace、debug 和部分提示。
     message: str = ""
+
+    # ReAct 步骤链：每一步记录 LLM 的 thought、tool 选择、执行结果。
+    steps: list[AgentStep] = field(default_factory=list)
 
     # 查询任务时返回的任务列表。
     items: list[ActionItemListItem] = field(default_factory=list)
@@ -86,3 +124,10 @@ class AgentResponse:
 
     # 写操作执行后的结果。
     executed_action: AgentExecutedAction | None = None
+
+    # 风险评估报告。
+    risk_report: ProjectRiskReport | None = None
+
+    # 兼容旧版 orchestrator 的 intent 字段，渐进式重构用。
+    intent_name: str = ""
+    intent_filters: dict[str, str] = field(default_factory=dict)

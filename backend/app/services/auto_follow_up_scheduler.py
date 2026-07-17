@@ -48,20 +48,36 @@ class AutoFollowUpScheduler:
         self._task = None
 
     async def _run_loop(self) -> None:
-        # 常驻循环：定期检查是否到了自动跟进时间。
+        # 常驻循环：定期检查是否到了自动分析时间。
         while True:
             now = datetime.now()
             if should_run_auto_follow_up(now, self._last_run_date, AUTO_FOLLOW_UP_HOUR, AUTO_FOLLOW_UP_MINUTE):
                 db = SessionLocal()
                 try:
-                    # 每次扫描使用独立数据库会话，执行完必须关闭。
+                    # 1. 传统跟进提醒（未完成任务 → 飞书卡片）
                     result = run_follow_up_scan(db, run_date=now.date())
+
+                    # 2. A2A 中央 Agent 分析：处理待处理 mRNA + 风险评估
+                    from app.agent.central_agent import process_central_agent_messages, register_central_agent
+                    from app.agent.tool_registry import DEFAULT_TOOL_REGISTRY
+                    from app.agent.tool_adapters import ANALYZE_RISK
+                    from app.services.meeting_service import list_action_items
+
+                    # 注册并处理中央 Agent 消息
+                    register_central_agent(1)  # project_id=1 for MVP
+                    central_response = process_central_agent_messages(db, 1)
+
+                    # 3. 每日风险分析
+                    items = list_action_items(db)
+                    risk_report = DEFAULT_TOOL_REGISTRY.execute(ANALYZE_RISK, db=db, project_id=1, items=items)
+
                     self._last_run_date = now.date()
                     logger.info(
-                        "Auto follow-up finished: scanned=%s candidates=%s sent=%s",
+                        "Auto follow-up: scanned=%s sent=%s | risk_score=%s overdue=%s",
                         result.scanned_meetings,
-                        result.total_candidates,
                         result.total_sent,
+                        risk_report.risk_score,
+                        risk_report.overdue_count,
                     )
                 except Exception:
                     logger.exception("Auto follow-up run failed.")

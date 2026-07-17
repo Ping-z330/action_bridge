@@ -43,8 +43,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 注册 agent-debug 安全中间件（生产环境禁用或需要 API Key）。
+from app.core.security import agent_debug_middleware
+app.middleware("http")(agent_debug_middleware)
+
 # 注册所有业务 API 路由。
 app.include_router(router)
+
+# 注册 Demo API（A2A 多 Agent 协作模拟）。
+from app.api.demo_routes import demo_router
+app.include_router(demo_router)
 
 
 @app.get("/health")

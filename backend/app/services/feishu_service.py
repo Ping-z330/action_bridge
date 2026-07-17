@@ -290,6 +290,37 @@ def _post_app_bot_card(card: dict[str, Any], receive_id: str | None = None) -> N
         raise FeishuDeliveryError(f"Feishu message API rejected request: {data}")
 
 
+def send_text_reply(text: str, open_id: str) -> str:
+    """Send a plain text message to a specific user via Feishu Bot API."""
+    if not FEISHU_APP_ID or FEISHU_APP_ID.startswith("replace_with_"):
+        raise FeishuDeliveryError("FEISHU_APP_ID is not configured")
+    if not FEISHU_APP_SECRET or FEISHU_APP_SECRET.startswith("replace_with_"):
+        raise FeishuDeliveryError("FEISHU_APP_SECRET is not configured")
+
+    token = _get_tenant_access_token()
+    body = {
+        "receive_id": open_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }
+    try:
+        response = httpx.post(
+            "https://open.feishu.cn/open-apis/im/v1/messages",
+            params={"receive_id_type": "open_id"},
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise FeishuDeliveryError(f"Failed to send text reply: {exc}") from exc
+
+    data = response.json()
+    if data.get("code") != 0:
+        raise FeishuDeliveryError(f"Feishu text reply rejected: {data}")
+    return "sent"
+
+
 def _get_tenant_access_token() -> str:
     """获取调用飞书自建应用消息 API 所需的 tenant_access_token。"""
 

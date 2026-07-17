@@ -1,273 +1,44 @@
-from datetime import UTC, datetime
+"""Tests for personal assistant (replaces old agent_service tests).
 
-from app.agent.schemas import AgentIntent
-from app.agent.service import detect_intent, detect_intent_with_fallback, handle_agent_message
-from app.schemas.task_result import ActionItemListItem
+The old detect_intent / handle_agent_message functions have been removed.
+Agent logic is now handled by the ReAct loop in graph.py.
+"""
+
+import pytest
+
+from app.agent.personal_assistant import build_personal_assistant_response
+from app.agent.schemas import AgentResponse
 
 
-def _task(
-    item_id: int,
-    title: str,
-    owner: str,
-    meeting_title: str,
-    status: str,
-    due_status: str,
-) -> ActionItemListItem:
-    return ActionItemListItem(
-        id=item_id,
-        meeting_id=1,
-        meeting_title=meeting_title,
-        title=title,
-        owner_name=owner,
-        deadline="2026-05-31 18:00",
-        deadline_date="2026-05-31",
-        deadline_time="18:00",
-        status=status,
-        due_status=due_status,
-        due_status_label=due_status,
-        created_at=datetime.now(UTC),
+def test_build_personal_assistant_reply_with_steps() -> None:
+    from app.agent.schemas import AgentStep
+    response = AgentResponse(
+        handled=True,
+        message="",
+        steps=[
+            AgentStep(tool_name="query_tasks", tool_args={"owner": "张三"}, tool_result="找到 2 个任务"),
+        ],
+        intent_name="query_tasks",
+        intent_filters={"owner": "张三"},
     )
+    reply = build_personal_assistant_response(response, "张三")
+    assert "张三" in reply
+    assert "query_tasks" in reply
 
 
-def test_detect_intent_for_due_today_tasks() -> None:
-    intent = detect_intent("帮我看看今天到期的任务")
+def test_build_personal_assistant_reply_unhandled() -> None:
+    response = AgentResponse(handled=False, message="")
+    reply = build_personal_assistant_response(response, "李四")
+    assert "暂时不太理解" in reply
 
-    assert intent is not None
-    assert intent.name == "query_tasks"
-    assert intent.filters["due_status"] == "due_today"
-    assert intent.filters["open_only"] == "true"
 
+def test_build_personal_assistant_reply_uses_llm_message() -> None:
+    response = AgentResponse(handled=True, message="你已完成 3 个任务，还有 2 个待处理。")
+    reply = build_personal_assistant_response(response, "张三")
+    assert "已处理您的请求" not in reply
+    assert "3 个任务" in reply
 
-def test_detect_intent_does_not_treat_non_task_today_question_as_due_query() -> None:
-    assert detect_intent("今天适合喝咖啡吗？") is None
 
-
-def test_detect_intent_for_completed_task_query() -> None:
-    intent = detect_intent("查询已经完成的任务")
-
-    assert intent is not None
-    assert intent.name == "query_tasks"
-    assert intent.filters == {"status": "completed"}
-
-
-def test_detect_intent_for_status_task_queries() -> None:
-    in_progress_intent = detect_intent("查看进行中任务")
-    failed_intent = detect_intent("有哪些有风险任务")
-
-    assert in_progress_intent is not None
-    assert in_progress_intent.name == "query_tasks"
-    assert in_progress_intent.filters == {"status": "in_progress"}
-    assert failed_intent is not None
-    assert failed_intent.name == "query_tasks"
-    assert failed_intent.filters == {"status": "failed"}
-
-
-def test_detect_intent_for_owner_update_with_clean_chinese_task_number() -> None:
-    message = "\u628a 2 \u53f7\u4efb\u52a1\u8d1f\u8d23\u4eba\u6539\u6210\u6d4b\u8bd5\u540c\u5b66"
-    intent = detect_intent(message)
-
-    assert intent is not None
-    assert intent.name == "update_task_owner"
-    assert intent.filters["action_item_id"] == "2"
-    assert intent.filters["owner_name"] == "\u6d4b\u8bd5\u540c\u5b66"
-
-
-def test_detect_intent_for_completed_task_update() -> None:
-    intent = detect_intent("把 12 号任务标记完成")
-
-    assert intent is not None
-    assert intent.name == "update_task_status"
-    assert intent.filters["action_item_id"] == "12"
-    assert intent.filters["status"] == "completed"
-
-
-def test_detect_intent_for_in_progress_task_update() -> None:
-    intent = detect_intent("把 8 号任务改成进行中")
-
-    assert intent is not None
-    assert intent.name == "update_task_status"
-    assert intent.filters["action_item_id"] == "8"
-    assert intent.filters["status"] == "in_progress"
-
-
-def test_detect_intent_for_failed_task_update() -> None:
-    intent = detect_intent("9 号任务有风险")
-
-    assert intent is not None
-    assert intent.name == "update_task_status"
-    assert intent.filters["action_item_id"] == "9"
-    assert intent.filters["status"] == "failed"
-
-
-def test_detect_intent_for_pending_task_update() -> None:
-    intent = detect_intent("把 6 号任务改回待处理")
-
-    assert intent is not None
-    assert intent.name == "update_task_status"
-    assert intent.filters["action_item_id"] == "6"
-    assert intent.filters["status"] == "pending"
-
-
-def test_detect_intent_for_project_progress_summary() -> None:
-    intent = detect_intent("官网改版进度怎么样")
-
-    assert intent is not None
-    assert intent.name == "summarize_project"
-    assert intent.filters["keyword"] == "官网改版"
-
-
-def test_detect_intent_for_help_message() -> None:
-    intent = detect_intent("你能做什么")
-
-    assert intent is not None
-    assert intent.name == "help"
-
-
-def test_detect_intent_for_create_task() -> None:
-    intent = detect_intent("帮我加一个任务，前端同学周五前完成登录页联调")
-
-    assert intent is not None
-    assert intent.name == "create_task"
-    assert intent.filters["owner_name"] == "前端同学"
-    assert intent.filters["deadline"] == "周五前"
-    assert intent.filters["title"] == "登录页联调"
-
-
-def test_detect_intent_for_create_task_missing_info() -> None:
-    intent = detect_intent("创建任务：登录页联调")
-
-    assert intent is not None
-    assert intent.name == "create_task_missing_info"
-    assert "负责人" in intent.filters["missing_fields"]
-    assert "截止时间" in intent.filters["missing_fields"]
-
-
-def test_detect_intent_for_update_task_deadline() -> None:
-    intent = detect_intent("把 12 号任务延期到周五")
-
-    assert intent is not None
-    assert intent.name == "update_task_deadline"
-    assert intent.filters["action_item_id"] == "12"
-    assert intent.filters["deadline"] == "周五"
-
-
-def test_detect_intent_for_update_task_owner() -> None:
-    intent = detect_intent("把 12 号任务负责人改成测试同学")
-
-    assert intent is not None
-    assert intent.name == "update_task_owner"
-    assert intent.filters["action_item_id"] == "12"
-    assert intent.filters["owner_name"] == "测试同学"
-
-
-def test_detect_intent_for_conversational_owner_update() -> None:
-    intent = detect_intent("12 这个事情先别给前端了，测试同学来跟")
-
-    assert intent is not None
-    assert intent.name == "update_task_owner"
-    assert intent.filters["action_item_id"] == "12"
-    assert intent.filters["owner_name"] == "测试同学"
-
-
-def test_handle_agent_message_filters_by_owner() -> None:
-    items = [
-        _task(1, "修复移动端问题", "前端同学", "官网改版", "pending", "upcoming"),
-        _task(2, "补充测试用例", "测试同学", "官网改版", "pending", "upcoming"),
-    ]
-
-    response = handle_agent_message("前端同学负责的任务", items)
-
-    assert response.handled is True
-    assert [item.id for item in response.items] == [1]
-
-
-def test_handle_agent_message_filters_by_project_keyword() -> None:
-    items = [
-        _task(1, "修复移动端问题", "前端同学", "官网改版上线会", "pending", "upcoming"),
-        _task(2, "整理复盘文档", "运营同学", "活动复盘会", "pending", "upcoming"),
-    ]
-
-    response = handle_agent_message("官网改版相关任务", items)
-
-    assert response.handled is True
-    assert [item.id for item in response.items] == [1]
-
-
-def test_handle_agent_message_summarizes_project_progress() -> None:
-    items = [
-        _task(1, "修复移动端问题", "前端同学", "官网改版上线会", "completed", "completed"),
-        _task(2, "补充测试用例", "测试同学", "官网改版上线会", "pending", "overdue"),
-        _task(3, "整理复盘文档", "运营同学", "活动复盘会", "pending", "upcoming"),
-    ]
-
-    response = handle_agent_message("官网改版进度怎么样", items)
-
-    assert response.handled is True
-    assert response.intent is not None
-    assert response.intent.name == "summarize_project"
-    assert response.progress_summary is not None
-    assert response.progress_summary.total_count == 2
-    assert response.progress_summary.completed_count == 1
-    assert response.progress_summary.overdue_count == 1
-    assert response.progress_summary.completion_rate == 50.0
-
-
-def test_detect_intent_with_fallback_uses_llm_when_rules_miss(monkeypatch) -> None:
-    import app.agent.service as agent_service
-
-    def fake_detect_llm_intent(message: str) -> AgentIntent:
-        assert message == "12 这个事情先别给前端了，测试同学来跟"
-        return AgentIntent(
-            name="update_task_owner",
-            filters={"action_item_id": "12", "owner_name": "测试同学"},
-        )
-
-    monkeypatch.setattr(agent_service, "detect_llm_intent", fake_detect_llm_intent)
-
-    intent = detect_intent_with_fallback("12 这个事情先别给前端了，测试同学来跟")
-
-    assert intent is not None
-    assert intent.name == "update_task_owner"
-    assert intent.filters["action_item_id"] == "12"
-    assert intent.filters["owner_name"] == "测试同学"
-
-
-def test_detect_intent_asks_task_reference_for_ambiguous_update() -> None:
-    intent = detect_intent("那个任务改成测试同学负责")
-
-    assert intent is not None
-    assert intent.name == "clarify_task_reference"
-    assert intent.filters["missing_fields"] == "任务编号"
-
-
-def test_detect_intent_with_fallback_asks_reference_before_update_without_task_id() -> None:
-    intent = detect_intent_with_fallback("把官网这个任务推进一下")
-
-    assert intent is not None
-    assert intent.name == "clarify_task_reference"
-    assert intent.filters["missing_fields"] == "任务编号"
-
-
-def test_detect_intent_with_fallback_prefers_llm_for_ambiguous_rule(monkeypatch) -> None:
-    import app.agent.service as agent_service
-
-    def fake_detect_llm_intent(message: str) -> AgentIntent:
-        assert message == "把官网这个任务推进一下"
-        return AgentIntent(
-            name="query_tasks",
-            filters={"keyword": "官网", "open_only": "true"},
-        )
-
-    monkeypatch.setattr(agent_service, "detect_llm_intent", fake_detect_llm_intent)
-
-    intent = detect_intent_with_fallback("把官网这个任务推进一下")
-
-    assert intent is not None
-    assert intent.name == "query_tasks"
-    assert intent.filters["keyword"] == "官网"
-
-
-def test_handle_agent_message_ignores_unrelated_chat() -> None:
-    response = handle_agent_message("大家下午好", [])
-
-    assert response.handled is False
+@pytest.mark.skip(reason="Old detect_intent-based tests removed")
+def test_detect_intent_legacy() -> None:
+    pass

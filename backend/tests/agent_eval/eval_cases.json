@@ -1,0 +1,142 @@
+[
+  {
+    "id": 1,
+    "input": "查看今天到期的任务",
+    "expected_tool": "query_tasks",
+    "expected_args": {"due_status": "due_today"},
+    "category": "query"
+  },
+  {
+    "id": 2,
+    "input": "今天有哪些任务要完成",
+    "expected_tool": "query_tasks",
+    "expected_args": {"due_status": "due_today"},
+    "category": "query"
+  },
+  {
+    "id": 3,
+    "input": "有哪些逾期任务",
+    "expected_tool": "query_tasks",
+    "expected_args": {"due_status": "overdue"},
+    "category": "query"
+  },
+  {
+    "id": 4,
+    "input": "看看官网改版项目有哪些没完成的任务",
+    "expected_tool": "query_tasks",
+    "expected_args": {"keyword": "官网改版", "open_only": true},
+    "category": "query"
+  },
+  {
+    "id": 5,
+    "input": "张三负责什么任务",
+    "expected_tool": "query_tasks",
+    "expected_args": {"owner": "张三"},
+    "category": "query"
+  },
+  {
+    "id": 6,
+    "input": "已完成的任务有哪些",
+    "expected_tool": "query_tasks",
+    "expected_args": {"status": "completed"},
+    "category": "query"
+  },
+  {
+    "id": 7,
+    "input": "把12号任务标记完成",
+    "expected_tool": "update_task_status",
+    "expected_args": {"action_item_id": 12, "target_status": "completed"},
+    "category": "write"
+  },
+  {
+    "id": 8,
+    "input": "3号任务进行中",
+    "expected_tool": "update_task_status",
+    "expected_args": {"action_item_id": 3, "target_status": "in_progress"},
+    "category": "write"
+  },
+  {
+    "id": 9,
+    "input": "5号任务有风险，后端接口一直没给",
+    "expected_tool": "update_task_status",
+    "expected_args": {"action_item_id": 5, "target_status": "failed"},
+    "category": "write"
+  },
+  {
+    "id": 10,
+    "input": "分析项目风险",
+    "expected_tool": "analyze_risk",
+    "expected_args": {},
+    "category": "report"
+  },
+  {
+    "id": 11,
+    "input": "生个项目进度报告",
+    "expected_tool": "generate_progress_report",
+    "expected_args": {},
+    "category": "report"
+  },
+  {
+    "id": 12,
+    "input": "官网改版项目进度怎么样",
+    "expected_tool": "summarize_project",
+    "expected_args": {"keyword": "官网改版"},
+    "category": "report"
+  },
+  {
+    "id": 13,
+    "input": "给大家发个预警：后端接口延期会影响联调",
+    "expected_tool": "create_alert",
+    "expected_args": {"severity": "warning"},
+    "category": "write"
+  },
+  {
+    "id": 14,
+    "input": "看看张三最近在干嘛",
+    "expected_tool": "query_member_activity",
+    "expected_args": {"member_name": "张三"},
+    "category": "query"
+  },
+  {
+    "id": 15,
+    "input": "查看进行中的任务",
+    "expected_tool": "query_tasks",
+    "expected_args": {"status": "in_progress"},
+    "category": "query"
+  },
+  {
+    "id": 16,
+    "input": "帮我看看哪些任务有风险",
+    "expected_tool": "analyze_risk",
+    "expected_args": {},
+    "category": "report"
+  },
+  {
+    "id": 17,
+    "input": "8号任务完成了",
+    "expected_tool": "update_task_status",
+    "expected_args": {"action_item_id": 8, "target_status": "completed"},
+    "category": "write"
+  },
+  {
+    "id": 18,
+    "input": "所有人都在做什么",
+    "expected_tool": "query_member_activity",
+    "expected_args": {},
+    "category": "query"
+  },
+  {
+    "id": 19,
+    "input": "到期的和逾期的一起看",
+    "expected_tool": "query_tasks",
+    "expected_args": {},
+    "category": "query"
+  },
+  {
+    "id": 20,
+    "input": "梳理一下官网项目总体情况",
+    "expected_tool": "generate_progress_report",
+    "expected_args": {},
+    "category": "report"
+  }
+]
